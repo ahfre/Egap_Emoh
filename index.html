@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="no">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <title>Søk</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    html, body { height: 100%; }
+    body { background: #FFFFFF; font-family: -apple-system, system-ui, "Helvetica Neue", Arial, sans-serif; }
+    .btn {
+      display: flex; align-items: center; justify-content: center;
+      min-height: 3.25rem; padding: 0 0.75rem; border: 0; border-radius: 0.75rem;
+      font-size: 1rem; font-weight: 600; cursor: pointer; user-select: none;
+      -webkit-tap-highlight-color: transparent; transition: opacity 0.15s ease;
+    }
+    .btn:active { opacity: 0.75; }
+    #q {
+      width: 100%; height: 3.5rem; padding: 0 1rem; border: 1px solid #D6D3CB;
+      border-radius: 0.75rem; font-size: 1.125rem; outline: none; background: #FFFFFF; color: #111;
+    }
+    #q:focus { border-color: #9A958A; box-shadow: 0 0 0 3px rgba(154,149,138,0.2); }
+    /* Farger (sRGB) */
+    .c-search   { background: #EEEBDE; color: #050000; }
+    .c-aimode   { background: #EEEBDE; color: #EE4CA8; }
+    .c-sider    { background: #7F60FE; color: #EE4CA8; }
+    .c-claude   { background: #C15F3C; color: #FAF9F5; }
+    .c-youtube  { background: #FF0032; color: #FFFFFE; }
+    .c-pk       { background: #0A2343; color: #A5F3FC; }
+    .c-dagsnytt { background: #0A2343; color: #FFC72C; }
+    .c-debatten { background: #0A2343; color: #FCA5A5; }
+  </style>
+</head>
+<body class="p-4 sm:p-8 max-w-2xl mx-auto">
+  <form id="f" class="grid grid-cols-5 gap-3" autocomplete="off">
+    <!-- Tekstfelt (rad 0, full bredde) -->
+    <input id="q" type="text" class="col-span-5" autofocus enterkeyhint="search" placeholder="Skriv her …" aria-label="Søk">
+
+    <!-- Søk (1. rad, full bredde) -->
+    <button type="submit" class="btn c-search col-span-5">Søk</button>
+
+    <!-- 2. rad, fra venstre mot høyre: Politisk kvarter, YouTube, Claude.AI, Sider.AI, AI-modus -->
+    <button type="button" class="btn c-pk" data-nrk="https://tv.nrk.no/serie/politisk-kvarter-tv">Politisk kvarter</button>
+    <button type="button" class="btn c-youtube" data-search="yt">YouTube</button>
+    <button type="button" class="btn c-claude" data-ai="claude">Claude.AI</button>
+    <button type="button" class="btn c-sider" data-ai="sider">Sider.AI</button>
+    <button type="button" class="btn c-aimode" data-ai="aimode">AI-modus</button>
+
+    <!-- 3. rad: samme bredde som Politisk kvarter -->
+    <button type="button" class="btn c-dagsnytt" data-nrk="https://tv.nrk.no/serie/dagsnytt-atten-tv">Dagsnytt 18</button>
+
+    <!-- 4. rad: samme bredde som Politisk kvarter -->
+    <button type="button" class="btn c-debatten" data-nrk="https://tv.nrk.no/serie/debatten">Debatten</button>
+  </form>
+
+  <script>
+    const KEY = "sok-startside-tekst";
+    const input = document.getElementById("q");
+    const form = document.getElementById("f");
+
+    // Gjenopprett tekst og fokuser feltet
+    try { input.value = localStorage.getItem(KEY) || ""; } catch (e) {}
+    input.focus();
+
+    // Lagre tekst fortløpende, slik at den beholdes ved fanebytte/reload
+    input.addEventListener("input", () => {
+      try { localStorage.setItem(KEY, input.value); } catch (e) {}
+    });
+
+    const enc = encodeURIComponent;
+    const text = () => input.value.trim();
+
+    function open(url) {
+      window.open(url, "_blank", "noopener");
+    }
+
+    // Enter og Søk-knappen
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      const t = text();
+      if (!t) { input.focus(); return; }
+      open("https://www.google.com/search?q=" + enc(t));
+    });
+
+    document.querySelectorAll("[data-nrk]").forEach((btn) => {
+      btn.addEventListener("click", () => open(btn.dataset.nrk));
+    });
+
+    document.querySelectorAll("[data-search]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const t = text();
+        if (!t) { input.focus(); return; }
+        open("https://www.youtube.com/results?search_query=" + enc(t));
+      });
+    });
+
+    // AI-knapper: kopierer også teksten til utklippstavlen som reserve,
+    // i tilfelle nettstedet ikke tar imot tekst via URL.
+    const ai = {
+      aimode: (t) => "https://www.google.com/search?udm=50&q=" + enc(t),
+      sider:  (t) => "https://sider.ai/no/chat?q=" + enc(t),
+      claude: (t) => "https://claude.ai/new?q=" + enc(t)
+    };
+
+    document.querySelectorAll("[data-ai]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const t = text();
+        if (!t) { input.focus(); return; }
+        // Kall må skje synkront i klikket for at popup ikke skal blokkeres
+        if (navigator.clipboard) navigator.clipboard.writeText(t).catch(() => {});
+        open(ai[btn.dataset.ai](t));
+      });
+    });
+  </script>
+</body>
+</html>
