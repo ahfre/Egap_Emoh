@@ -4,130 +4,306 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="format-detection" content="telephone=no">
+  <meta name="color-scheme" content="light">
   <title>Søk</title>
   <style>
+    :root {
+      --gap: 0.75rem;
+      /* Bredden én knapp hadde i det gamle rutenettet med 5 kolonner */
+      --cell: calc((100% - 4 * var(--gap)) / 5);
+    }
     *, *::before, *::after { box-sizing: border-box; }
-    html, body { height: 100%; }
+    [hidden] { display: none !important; }
+    html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
     body {
       margin: 0 auto; max-width: 42rem; padding: 1rem;
-      background: #FFFFFF; line-height: 1.5;
+      background: #FFFFFF; color: #111; line-height: 1.5;
       font-family: -apple-system, system-ui, "Helvetica Neue", Arial, sans-serif;
     }
     @media (min-width: 640px) { body { padding: 2rem; } }
-    button, input { font-family: inherit; margin: 0; }
+    button, input, textarea { font: inherit; color: inherit; margin: 0; }
+    textarea { -webkit-appearance: none; appearance: none; }
 
-    #f {
-      display: grid;
-      grid-template-columns: repeat(5, minmax(0, 1fr));
-      gap: 0.75rem;
+    /* ---------- Fanelinje ---------- */
+    .tabs {
+      display: flex;
+      border-bottom: 2px solid #0A2343;
+      margin-bottom: 1rem;
     }
-    .full { grid-column: 1 / -1; }
+    .tab {
+      flex: none; width: var(--cell); min-width: 0; height: 1.625rem;
+      display: flex; align-items: center; justify-content: center;
+      padding: 0 0.4rem; overflow: hidden;
+      border-radius: 0.5rem 0.5rem 0 0;
+      font-size: clamp(0.5625rem, 1.8vw, 0.75rem); font-weight: 600; line-height: 1;
+      text-decoration: none; user-select: none; -webkit-user-select: none;
+      -webkit-tap-highlight-color: transparent; transition: filter 0.15s ease, opacity 0.15s ease;
+    }
+    .tab span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tab + .tab { box-shadow: inset 1px 0 0 rgba(255, 255, 255, 0.18); }
+    .tab:hover { filter: brightness(1.15); }
+    .tab:active { opacity: 0.75; }
 
+    /* ---------- Søkefelt ---------- */
+    .search {
+      display: flex; align-items: stretch;
+      border: 1px solid #D6D3CB; border-radius: 0.75rem; background: #FFFFFF;
+      transition: border-color 0.15s ease, box-shadow 0.15s ease;
+    }
+    .search:focus-within { border-color: #9A958A; box-shadow: 0 0 0 3px rgba(154,149,138,0.2); }
+    .chip {
+      flex: none; padding: 13px 0.75rem 13px 1rem;
+      border-right: 1px solid #EEEBDE;
+      font-size: 1.125rem; line-height: 28px; font-weight: 700; white-space: nowrap;
+      user-select: none; -webkit-user-select: none; pointer-events: none;
+    }
+    #q {
+      flex: 1 1 auto; min-width: 0; display: block;
+      min-height: 54px; padding: 13px 1rem;
+      border: 0; outline: none; background: transparent; resize: none; overflow: hidden;
+      font-size: 1.125rem; line-height: 28px; color: #111;
+    }
+
+    /* ---------- Knapper ---------- */
+    .row { display: flex; gap: var(--gap); margin-top: var(--gap); }
+    .row.spread { gap: 0; justify-content: space-between; }
     .btn {
       display: flex; align-items: center; justify-content: center; text-align: center;
       min-height: 3.25rem; padding: 0 0.75rem; border: 0; border-radius: 0.75rem;
-      font-size: 1rem; font-weight: 600; line-height: 1.2; cursor: pointer; user-select: none;
-      -webkit-tap-highlight-color: transparent; transition: opacity 0.15s ease;
+      font-size: 1rem; font-weight: 600; line-height: 1.2; cursor: pointer;
+      user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent;
+      transition: opacity 0.2s ease, filter 0.2s ease;
     }
     .btn:active { opacity: 0.75; }
-    #q {
-      width: 100%; height: 3.5rem; padding: 0 1rem; border: 1px solid #D6D3CB;
-      border-radius: 0.75rem; font-size: 1.125rem; outline: none; background: #FFFFFF; color: #111;
-    }
-    #q:focus { border-color: #9A958A; box-shadow: 0 0 0 3px rgba(154,149,138,0.2); }
+    .grow { flex: 1 1 auto; }
+    .cell { flex: none; width: var(--cell); }
+    .btn.dim { filter: grayscale(1); opacity: 0.35; }
 
     /* Farger (sRGB) */
+    .c-vpn      { background: #EEEBDE; color: #050000; }
     .c-search   { background: #EEEBDE; color: #050000; }
     .c-aimode   { background: #EEEBDE; color: #EE4CA8; }
     .c-sider    { background: #7F60FE; color: #EE4CA8; }
     .c-claude   { background: #C15F3C; color: #FAF9F5; }
+    .c-anki     { background: #2468B8; color: #FFFFFF; }
     .c-youtube  { background: #FF0032; color: #FFFFFE; }
     .c-pk       { background: #0A2343; color: #A5F3FC; }
     .c-dagsnytt { background: #0A2343; color: #FFC72C; }
     .c-debatten { background: #0A2343; color: #FCA5A5; }
+
+    /* ---------- Skriblerier ---------- */
+    .notes {
+      position: relative; display: flex; align-items: stretch;
+      margin-top: 1.5rem;
+      border: 1px solid #EEEBDE; border-radius: 0.75rem;
+      min-height: 100vh; min-height: 100dvh;
+    }
+    .gutter {
+      flex: none; min-width: 2.25rem; padding: 0.75rem 0.25rem 0.75rem 0.75rem;
+      text-align: right; font-size: 0.75rem; line-height: 1.5rem; color: #C9C5BB;
+      font-variant-numeric: tabular-nums;
+      user-select: none; -webkit-user-select: none; cursor: text;
+    }
+    .gutter > div { overflow: hidden; }
+    #notes, .mirror {
+      font-size: 1rem; line-height: 1.5rem;
+      padding: 0.75rem 0.75rem 0.75rem 0.5rem;
+      white-space: pre-wrap; overflow-wrap: break-word; word-break: normal; tab-size: 8;
+    }
+    #notes {
+      flex: 1 1 auto; min-width: 0; display: block;
+      border: 0; outline: none; background: transparent; resize: none; overflow: hidden; color: #111;
+    }
+    .mirror {
+      position: absolute; top: 0; left: 0; height: 0; overflow: hidden;
+      visibility: hidden; pointer-events: none;
+    }
   </style>
 </head>
 <body>
-  <form id="f" autocomplete="off">
-    <!-- Tekstfelt (rad 0, full bredde) -->
-    <input id="q" type="text" class="full" autofocus enterkeyhint="search" placeholder="Skriv her …" aria-label="Søk">
+  <!-- Fanelinje -->
+  <nav class="tabs" aria-label="Snarveier">
+    <a class="tab c-vpn" href="shortcuts://run-shortcut?name=UiB-VPN" title="VPN → MittUiB"><span>[VPN → MittUiB]</span></a>
+    <a class="tab c-pk" href="https://tv.nrk.no/serie/politisk-kvarter-tv" target="_blank" rel="noopener" title="Politisk kvarter"><span>Politisk kvarter</span></a>
+    <a class="tab c-dagsnytt" href="https://tv.nrk.no/serie/dagsnytt-atten-tv" target="_blank" rel="noopener" title="Dagsnytt 18"><span>Dagsnytt 18</span></a>
+    <a class="tab c-debatten" href="https://tv.nrk.no/serie/debatten" target="_blank" rel="noopener" title="Debatten"><span>Debatten</span></a>
+  </nav>
 
-    <!-- Søk (1. rad, full bredde) -->
-    <button type="submit" class="btn c-search full">Søk</button>
+  <!-- Søkefelt (huskes ikke) -->
+  <div class="search">
+    <span id="chip" class="chip" aria-hidden="true" hidden></span>
+    <textarea id="q" rows="1" autofocus placeholder="Skriv her …" aria-label="Søk" autocomplete="off"></textarea>
+  </div>
 
-    <!-- 2. rad, fra venstre mot høyre: Politisk kvarter, YouTube, Claude.AI, Sider.AI, AI-modus -->
-    <button type="button" class="btn c-pk" data-nrk="https://tv.nrk.no/serie/politisk-kvarter-tv">Politisk kvarter</button>
-    <button type="button" class="btn c-youtube" data-search="yt">YouTube</button>
-    <button type="button" class="btn c-claude" data-ai="claude">Claude.AI</button>
-    <button type="button" class="btn c-sider" data-ai="sider">Sider.AI</button>
-    <button type="button" class="btn c-aimode" data-ai="aimode">AI-modus</button>
+  <!-- 1. rad: Søk + AI-modus -->
+  <div class="row">
+    <button type="button" class="btn c-search grow" data-medium="google">Søk</button>
+    <button type="button" class="btn c-aimode cell" data-medium="aimode">AI-modus</button>
+  </div>
 
-    <!-- 3. rad: samme bredde som Politisk kvarter -->
-    <button type="button" class="btn c-dagsnytt" data-nrk="https://tv.nrk.no/serie/dagsnytt-atten-tv">Dagsnytt 18</button>
+  <!-- 2. rad: YouTube, [Anki], [Claude.AI], Sider.AI -->
+  <div class="row spread">
+    <button type="button" class="btn c-youtube cell" data-medium="youtube">YouTube</button>
+    <button type="button" class="btn c-anki cell" data-medium="anki">[Anki]</button>
+    <button type="button" class="btn c-claude cell" data-medium="claude">[Claude.AI]</button>
+    <button type="button" class="btn c-sider cell" data-medium="sider">Sider.AI</button>
+  </div>
 
-    <!-- 4. rad: samme bredde som Politisk kvarter -->
-    <button type="button" class="btn c-debatten" data-nrk="https://tv.nrk.no/serie/debatten">Debatten</button>
-  </form>
+  <!-- Skriblerier (huskes mellom faner og økter) -->
+  <div class="notes">
+    <div id="gutter" class="gutter" aria-hidden="true"></div>
+    <textarea id="notes" rows="2" aria-label="Skriblerier"></textarea>
+    <div id="mirror" class="mirror" aria-hidden="true"></div>
+  </div>
 
   <script>
-    const KEY = "sok-startside-tekst";
-    const input = document.getElementById("q");
-    const form = document.getElementById("f");
-
-    // Gjenopprett tekst og fokuser feltet
-    try { input.value = localStorage.getItem(KEY) || ""; } catch (e) {}
-    input.focus();
-
-    // Lagre tekst fortløpende, slik at den beholdes ved fanebytte/reload
-    input.addEventListener("input", () => {
-      try { localStorage.setItem(KEY, input.value); } catch (e) {}
-    });
-
+  (() => {
+    "use strict";
+    const $ = (id) => document.getElementById(id);
+    const q = $("q"), chip = $("chip"), notes = $("notes"), gutter = $("gutter"), mirror = $("mirror");
+    const NOTES_KEY = "sok-skriblerier";
     const enc = encodeURIComponent;
-    const text = () => input.value.trim();
 
-    // NB: Heter "openUrl" (ikke "open") for ikke å overskrive nettleserens window.open
-    function openUrl(url) {
-      window.open(url, "_blank", "noopener");
+    // ---------- Hjelpefunksjoner ----------
+    const store = {
+      get() { try { return localStorage.getItem(NOTES_KEY) || ""; } catch (e) { return ""; } },
+      set(v) { try { localStorage.setItem(NOTES_KEY, v); } catch (e) {} }
+    };
+    // NB: Heter "openUrl" (ikke "open") for ikke å overskrive window.open
+    const openUrl = (url) => window.open(url, "_blank", "noopener");
+    const runShortcut = (name, t) => {
+      window.location.href = "shortcuts://run-shortcut?name=" + enc(name) + "&input=text&text=" + enc(t);
+    };
+    const copy = (t) => {
+      try { if (navigator.clipboard) navigator.clipboard.writeText(t).catch(() => {}); } catch (e) {}
+    };
+    function autosize(el) {
+      const y = window.scrollY;
+      el.style.height = "auto";
+      el.style.height = el.scrollHeight + "px";
+      if (window.scrollY !== y) window.scrollTo(0, y);
     }
 
-    // Enter og Søk-knappen
-    form.addEventListener("submit", (e) => {
-      e.preventDefault();
-      const t = text();
-      if (!t) { input.focus(); return; }
-      openUrl("https://www.google.com/search?q=" + enc(t));
-    });
-
-    document.querySelectorAll("[data-nrk]").forEach((btn) => {
-      btn.addEventListener("click", () => openUrl(btn.dataset.nrk));
-    });
-
-    document.querySelectorAll("[data-search]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const t = text();
-        if (!t) { input.focus(); return; }
-        openUrl("https://www.youtube.com/results?search_query=" + enc(t));
-      });
-    });
-
-    // AI-knapper: kopierer også teksten til utklippstavlen som reserve,
-    // i tilfelle nettstedet ikke tar imot tekst via URL.
-    const ai = {
-      aimode: (t) => "https://www.google.com/search?udm=50&q=" + enc(t),
-      sider:  (t) => "https://sider.ai/no/chat?q=" + enc(t),
-      claude: (t) => "https://claude.ai/new?q=" + enc(t)
+    // ---------- Søkemedier ----------
+    const MEDIA = {
+      google:  (t) => openUrl("https://www.google.com/search?q=" + enc(t)),
+      aimode:  (t) => { copy(t); openUrl("https://www.google.com/search?udm=50&q=" + enc(t)); },
+      youtube: (t) => openUrl("https://www.youtube.com/results?search_query=" + enc(t)),
+      anki:    (t) => runShortcut("InputBrowseAnki", t),
+      claude:  (t) => runShortcut("InputAskClaude", t),
+      sider:   (t) => { copy(t); openUrl("https://sider.ai/no/chat?q=" + enc(t)); }
     };
 
-    document.querySelectorAll("[data-ai]").forEach((btn) => {
-      btn.addEventListener("click", () => {
-        const t = text();
-        if (!t) { input.focus(); return; }
-        // Kall må skje synkront i klikket for at popup ikke skal blokkeres
-        if (navigator.clipboard) navigator.clipboard.writeText(t).catch(() => {});
-        openUrl(ai[btn.dataset.ai](t));
+    const buttons = Array.from(document.querySelectorAll("[data-medium]"));
+    let selected = "google";
+
+    function select(m) {
+      selected = m;
+      const active = m !== "google";
+      buttons.forEach((b) => {
+        const me = b.dataset.medium === m;
+        b.classList.toggle("dim", active && !me);
+        b.setAttribute("aria-pressed", String(active && me));
+      });
+      if (active) {
+        const b = buttons.find((x) => x.dataset.medium === m);
+        chip.textContent = b.textContent.trim();
+        chip.style.color = getComputedStyle(b).backgroundColor;
+        chip.hidden = false;
+      } else {
+        chip.hidden = true;
+      }
+      autosize(q);
+    }
+
+    buttons.forEach((b) => {
+      b.addEventListener("mousedown", (e) => e.preventDefault()); // behold fokus i søkefeltet
+      b.addEventListener("click", () => {
+        const m = b.dataset.medium;
+        const t = q.value.trim();
+        if (t) { MEDIA[m](t); return; }
+        // Tomt søkefelt: velg søkemedium for Enter (trykk igjen / på "Søk" for å nullstille)
+        select(m === "google" || m === selected ? "google" : m);
+        q.focus();
       });
     });
+
+    q.addEventListener("keydown", (e) => {
+      if (e.isComposing || e.keyCode === 229) return;
+      if (e.key === "Enter" && !e.shiftKey && !e.altKey) {
+        e.preventDefault();
+        const t = q.value.trim();
+        if (t) MEDIA[selected](t);
+      } else if (e.key === "Escape" && selected !== "google") {
+        e.preventDefault();
+        select("google");
+      } else if (e.key === "Backspace" && selected !== "google" &&
+                 q.selectionStart === 0 && q.selectionEnd === 0) {
+        e.preventDefault();
+        select("google");
+      }
+    });
+    q.addEventListener("input", () => autosize(q));
+
+    // ---------- Skriblerier med linjenummer ----------
+    function layoutNotes() {
+      for (let pass = 0; pass < 2; pass++) {
+        const w = notes.clientWidth;
+        mirror.style.width = w + "px";
+        const lines = notes.value.split("\n");
+        const m = document.createDocumentFragment();
+        for (const line of lines) {
+          const d = document.createElement("div");
+          d.textContent = line || "\u200b";
+          m.appendChild(d);
+        }
+        mirror.replaceChildren(m);
+        const g = document.createDocumentFragment();
+        const kids = mirror.children;
+        for (let i = 0; i < kids.length; i++) {
+          const d = document.createElement("div");
+          d.style.height = kids[i].getBoundingClientRect().height + "px";
+          d.textContent = String(i + 1);
+          g.appendChild(d);
+        }
+        gutter.replaceChildren(g);
+        if (notes.clientWidth === w) break; // margbredden endret seg ikke
+      }
+      autosize(notes);
+    }
+
+    notes.addEventListener("input", () => { store.set(notes.value); layoutNotes(); });
+    gutter.addEventListener("click", () => notes.focus());
+
+    function reloadNotes() {
+      if (document.activeElement === notes) return;
+      const v = store.get();
+      if (v !== notes.value) { notes.value = v; layoutNotes(); }
+    }
+    window.addEventListener("storage", (e) => { if (e.key === NOTES_KEY) reloadNotes(); });
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) reloadNotes(); });
+    window.addEventListener("pagehide", () => store.set(notes.value));
+
+    let raf = 0;
+    window.addEventListener("resize", () => {
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => { autosize(q); layoutNotes(); });
+    });
+
+    // ---------- Oppstart ----------
+    q.value = "";
+    notes.value = store.get();
+    autosize(q);
+    layoutNotes();
+
+    const focusSearch = () => {
+      const a = document.activeElement;
+      if (!a || a === document.body || a === document.documentElement) q.focus({ preventScroll: true });
+    };
+    focusSearch();
+    window.addEventListener("pageshow", focusSearch);
+  })();
   </script>
 </body>
 </html>
