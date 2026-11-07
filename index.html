@@ -1,309 +1,1337 @@
-<!DOCTYPE html>
-<html lang="no">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="format-detection" content="telephone=no">
-  <meta name="color-scheme" content="light">
-  <title>Søk</title>
-  <style>
-    :root {
-      --gap: 0.75rem;
-      /* Bredden én knapp hadde i det gamle rutenettet med 5 kolonner */
-      --cell: calc((100% - 4 * var(--gap)) / 5);
-    }
-    *, *::before, *::after { box-sizing: border-box; }
-    [hidden] { display: none !important; }
-    html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
-    body {
-      margin: 0 auto; max-width: 42rem; padding: 1rem;
-      background: #FFFFFF; color: #111; line-height: 1.5;
-      font-family: -apple-system, system-ui, "Helvetica Neue", Arial, sans-serif;
-    }
-    @media (min-width: 640px) { body { padding: 2rem; } }
-    button, input, textarea { font: inherit; color: inherit; margin: 0; }
-    textarea { -webkit-appearance: none; appearance: none; }
+// ==UserScript==
+// @name         Sider-sidepanel
+// @description  Sidepanel på alle nettsider som sender spørsmål til ditt eget, innloggede sider.ai-vindu og viser svaret.
+// @version      2.0
+// @match        *://*/*
+// @exclude      *://*.dnb.no/*
+// @exclude      *://*.sparebank1.no/*
+// @exclude      *://*.nordea.no/*
+// @exclude      *://*.handelsbanken.no/*
+// @exclude      *://*.bankid.no/*
+// @exclude      *://*.idporten.no/*
+// @exclude      *://*.altinn.no/*
+// @exclude      *://*.helsenorge.no/*
+// @exclude      *://*.nav.no/*
+// @exclude      *://*.skatteetaten.no/*
+// @exclude      *://*.vipps.no/*
+// @exclude      *://*.paypal.com/*
+// @noframes
+// @inject-into  content
+// @run-at       document-end
+// @grant        GM.getValue
+// @grant        GM.setValue
+// @grant        GM.deleteValue
+// @grant        GM.listValues
+// @grant        GM.openInTab
+// ==/UserScript==
 
-    /* ---------- Fanelinje ---------- */
-    .tabs {
-      display: flex;
-      border-bottom: 2px solid #0A2343;
-      margin-bottom: 1rem;
-    }
-    .tab {
-      flex: none; width: var(--cell); min-width: 0; height: 1.625rem;
-      display: flex; align-items: center; justify-content: center;
-      padding: 0 0.4rem; overflow: hidden;
-      border-radius: 0.5rem 0.5rem 0 0;
-      font-size: clamp(0.5625rem, 1.8vw, 0.75rem); font-weight: 600; line-height: 1;
-      text-decoration: none; user-select: none; -webkit-user-select: none;
-      -webkit-tap-highlight-color: transparent; transition: filter 0.15s ease, opacity 0.15s ease;
-    }
-    .tab span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .tab + .tab { box-shadow: inset 1px 0 0 rgba(255, 255, 255, 0.18); }
-    .tab:hover { filter: brightness(1.15); }
-    .tab:active { opacity: 0.75; }
+(() => {
+  "use strict";
+  if (window.top !== window.self || window.__siderSidepanel) return;
+  window.__siderSidepanel = true;
 
-    /* ---------- Søkefelt ---------- */
-    .search {
-      display: flex; align-items: stretch;
-      border: 1px solid #D6D3CB; border-radius: 0.75rem; background: #FFFFFF;
-      transition: border-color 0.15s ease, box-shadow 0.15s ease;
-    }
-    .search:focus-within { border-color: #9A958A; box-shadow: 0 0 0 3px rgba(154,149,138,0.2); }
-    .chip {
-      flex: none; padding: 13px 0.75rem 13px 1rem;
-      border-right: 1px solid #EEEBDE;
-      font-size: 1.125rem; line-height: 28px; font-weight: 700; white-space: nowrap;
-      user-select: none; -webkit-user-select: none; pointer-events: none;
-    }
-    #q {
-      flex: 1 1 auto; min-width: 0; display: block;
-      min-height: 54px; padding: 13px 1rem;
-      border: 0; outline: none; background: transparent; resize: none; overflow: hidden;
-      font-size: 1.125rem; line-height: 28px; color: #111;
-    }
+  /* =====================================================================
+     INNSTILLINGER
+     ===================================================================== */
+  const CFG = {
+    chatUrl: "https://sider.ai/no/chat",
+    settleMs: 2500,               // svaret regnes som ferdig når det har stått stille så lenge
+    timeoutMs: 5 * 60 * 1000,
+    maxPageChars: 15000,          // «+ All tekst»
+    maxTranscriptChars: 60000,    // YouTube-transkripsjon
+    ytWindowSec: 90,              // «Utdrag rundt nå»: ± sekunder
+    maxUploadChars: 4.6e6,        // ca. 3,4 MB vedlegg per melding (base64)
+    maxTextPreview: 500000,
+    maxHistory: 80,
+    defaultWidth: 210,
+    accents: ["#7F60FE", "#C15F3C", "#2468B8", "#2E8B57", "#EE4CA8", "#5A5A5A"]
+  };
+  // Verifisert mot sider.ai (Eruda-dumpen din)
+  const SEL = {
+    textarea:   ".chat-input-box textarea.chatBox-input",
+    anyInput:   'textarea, [contenteditable="true"]',
+    send:       ".chat-input-box .send-btn",
+    fileInput:  '.chat-input-box input[type="file"]',
+    inputArea:  ".chat-input-box .chat-input-area",
+    chip:       ".chat-input-area .group",
+    modelBtn:   ".chat-input-box .chat-input-top-bar .model-btn:not(.model-btn-no-bg)",
+    popover:    ".chatBox-popover:not(.chatBox-popover-hidden)",
+    modelTitle: ".model-title",
+    answer:     ".answer-markdown-box",
+    think:      ".thinking-markdown",
+    art:        ".sider-artifact-block, .artifact-code-block, .artifact-markdown-block"
+  };
+  const K = {
+    req: "sp_req", reqFiles: "sp_req_files", res: "sp_res", hb: "sp_heartbeat",
+    hist: "sp_history", ver: "sp_history_ver", done: "sp_done", nav: "sp_nav", fresh: "sp_fresh",
+    state: "sp_state", models: "sp_models", cmd: "sp_cmd", cmdDone: "sp_cmd_done",
+    settings: "sp_settings", width: "sp_width", open: "sp_open", fabY: "sp_fabY", file: "sp_file_"
+  };
+  const NEWCHAT_FLAG = "stm_sider_newchat_flag";        // fra ditt STM-skript (seksjon 3)
+  const STM_MODEL_CACHE = "stm_sider_models_v2";        // fra ditt STM-skript (seksjon 2)
 
-    /* ---------- Knapper ---------- */
-    .row { display: flex; gap: var(--gap); margin-top: var(--gap); }
-    .row.spread { gap: 0; justify-content: space-between; }
-    .btn {
-      display: flex; align-items: center; justify-content: center; text-align: center;
-      min-height: 3.25rem; padding: 0 0.75rem; border: 0; border-radius: 0.75rem;
-      font-size: 1rem; font-weight: 600; line-height: 1.2; cursor: pointer;
-      user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent;
-      transition: opacity 0.2s ease, filter 0.2s ease;
+  /* =====================================================================
+     FELLES HJELPEFUNKSJONER
+     ===================================================================== */
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const now = () => Date.now();
+  const uid = () => now().toString(36) + Math.random().toString(36).slice(2, 7);
+  const getJ = async (k, d) => { try { const v = await GM.getValue(k, ""); return v ? JSON.parse(v) : d; } catch (e) { return d; } };
+  const setJ = (k, v) => GM.setValue(k, JSON.stringify(v));
+  const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; };
+  const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+  const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+  function visible(e) {
+    if (!e || !e.isConnected) return false;
+    if (e.closest(".invisible, .opacity-0, [aria-hidden='true']")) return false;
+    const r = e.getBoundingClientRect();
+    if (r.width < 1 || r.height < 1) return false;
+    const s = getComputedStyle(e);
+    return s.visibility !== "hidden" && s.display !== "none" && parseFloat(s.opacity) > 0.05;
+  }
+
+  /* ---------- Rensing av HTML: bare trygge formateringstagger ---------- */
+  const ALLOWED = new Set(("P BR STRONG B EM I U S DEL CODE PRE UL OL LI H1 H2 H3 H4 H5 H6 " +
+    "BLOCKQUOTE TABLE THEAD TBODY TR TH TD A HR SUP SUB SPAN DIV").split(" "));
+  const DROP = /^(SCRIPT|STYLE|BUTTON|SVG|IMG|PICTURE|VIDEO|AUDIO|CANVAS|INPUT|TEXTAREA|SELECT|IFRAME|OBJECT|EMBED|NOSCRIPT|TEMPLATE|FORM|LINK|META)$/i;
+  function artInfo(n, gi) {
+    const codeEl = n.querySelector("pre code") || n.querySelector("pre") || n.querySelector("code");
+    const t = n.querySelector('[class*="title"], h1, h2, h3, h4');
+    const title = ((t && t.textContent) || (n.innerText || "").split("\n")[0] || "Artefakt").trim().slice(0, 80) || "Artefakt";
+    if (codeEl) {
+      const m = ((codeEl.className || "") + " " + (codeEl.parentElement ? codeEl.parentElement.className : "")).match(/language-([\w+#-]+)/);
+      return { title, kind: "code", lang: m ? m[1] : "", text: codeEl.textContent || "", gi };
     }
-    .btn:active { opacity: 0.75; }
-    .grow { flex: 1 1 auto; }
-    .cell { flex: none; width: var(--cell); }
-    .btn.dim { filter: grayscale(1); opacity: 0.35; }
-
-    /* Farger (sRGB) */
-    .c-vpn      { background: #EEEBDE; color: #050000; }
-    .c-search   { background: #EEEBDE; color: #050000; }
-    .c-aimode   { background: #EEEBDE; color: #EE4CA8; }
-    .c-sider    { background: #7F60FE; color: #EE4CA8; }
-    .c-claude   { background: #C15F3C; color: #FAF9F5; }
-    .c-anki     { background: #2468B8; color: #FFFFFF; }
-    .c-youtube  { background: #FF0032; color: #FFFFFE; }
-    .c-pk       { background: #0A2343; color: #A5F3FC; }
-    .c-dagsnytt { background: #0A2343; color: #FFC72C; }
-    .c-debatten { background: #0A2343; color: #FCA5A5; }
-
-    /* ---------- Skriblerier ---------- */
-    .notes {
-      position: relative; display: flex; align-items: stretch;
-      margin-top: 1.5rem;
-      border: 1px solid #EEEBDE; border-radius: 0.75rem;
-      min-height: 100vh; min-height: 100dvh;
-    }
-    .gutter {
-      flex: none; min-width: 2.25rem; padding: 0.75rem 0.25rem 0.75rem 0.75rem;
-      text-align: right; font-size: 0.75rem; line-height: 1.5rem; color: #C9C5BB;
-      font-variant-numeric: tabular-nums;
-      user-select: none; -webkit-user-select: none; cursor: text;
-    }
-    .gutter > div { overflow: hidden; }
-    #notes, .mirror {
-      font-size: 1rem; line-height: 1.5rem;
-      padding: 0.75rem 0.75rem 0.75rem 0.5rem;
-      white-space: pre-wrap; overflow-wrap: break-word; word-break: normal; tab-size: 8;
-    }
-    #notes {
-      flex: 1 1 auto; min-width: 0; display: block;
-      border: 0; outline: none; background: transparent; resize: none; overflow: hidden; color: #111;
-    }
-    .mirror {
-      position: absolute; top: 0; left: 0; height: 0; overflow: hidden;
-      visibility: hidden; pointer-events: none;
-    }
-  </style>
-</head>
-<body>
-  <!-- Fanelinje -->
-  <nav class="tabs" aria-label="Snarveier">
-    <a class="tab c-vpn" href="shortcuts://run-shortcut?name=UiB-VPN" title="VPN → MittUiB"><span>[VPN → MittUiB]</span></a>
-    <a class="tab c-pk" href="https://tv.nrk.no/serie/politisk-kvarter-tv" target="_blank" rel="noopener" title="Politisk kvarter"><span>Politisk kvarter</span></a>
-    <a class="tab c-dagsnytt" href="https://tv.nrk.no/serie/dagsnytt-atten-tv" target="_blank" rel="noopener" title="Dagsnytt 18"><span>Dagsnytt 18</span></a>
-    <a class="tab c-debatten" href="https://tv.nrk.no/serie/debatten" target="_blank" rel="noopener" title="Debatten"><span>Debatten</span></a>
-  </nav>
-
-  <!-- Søkefelt (huskes ikke) -->
-  <div class="search">
-    <span id="chip" class="chip" aria-hidden="true" hidden></span>
-    <textarea id="q" rows="1" autofocus placeholder="Skriv her …" aria-label="Søk" autocomplete="off"></textarea>
-  </div>
-
-  <!-- 1. rad: Søk + AI-modus -->
-  <div class="row">
-    <button type="button" class="btn c-search grow" data-medium="google">Søk</button>
-    <button type="button" class="btn c-aimode cell" data-medium="aimode">AI-modus</button>
-  </div>
-
-  <!-- 2. rad: YouTube, [Anki], [Claude.AI], Sider.AI -->
-  <div class="row spread">
-    <button type="button" class="btn c-youtube cell" data-medium="youtube">YouTube</button>
-    <button type="button" class="btn c-anki cell" data-medium="anki">[Anki]</button>
-    <button type="button" class="btn c-claude cell" data-medium="claude">[Claude.AI]</button>
-    <button type="button" class="btn c-sider cell" data-medium="sider">Sider.AI</button>
-  </div>
-
-  <!-- Skriblerier (huskes mellom faner og økter) -->
-  <div class="notes">
-    <div id="gutter" class="gutter" aria-hidden="true"></div>
-    <textarea id="notes" rows="2" aria-label="Skriblerier"></textarea>
-    <div id="mirror" class="mirror" aria-hidden="true"></div>
-  </div>
-
-  <script>
-  (() => {
-    "use strict";
-    const $ = (id) => document.getElementById(id);
-    const q = $("q"), chip = $("chip"), notes = $("notes"), gutter = $("gutter"), mirror = $("mirror");
-    const NOTES_KEY = "sok-skriblerier";
-    const enc = encodeURIComponent;
-
-    // ---------- Hjelpefunksjoner ----------
-    const store = {
-      get() { try { return localStorage.getItem(NOTES_KEY) || ""; } catch (e) { return ""; } },
-      set(v) { try { localStorage.setItem(NOTES_KEY, v); } catch (e) {} }
+    return { title, kind: "html", html: sanitizeNode(n), gi };
+  }
+  function sanitizeNode(src, ctx) {
+    const out = document.createElement("div");
+    const walk = (from, to) => {
+      for (const n of from.childNodes) {
+        if (n.nodeType === 3) { to.appendChild(document.createTextNode(n.nodeValue)); continue; }
+        if (n.nodeType !== 1) continue;
+        const tag = n.tagName.toUpperCase();
+        const sp = n.getAttribute("data-sp");
+        if (sp === "think") { const d = el("div"); d.setAttribute("data-sp", "think"); walk(n, d); to.appendChild(d); continue; }
+        if (sp === "art") { const d = el("div", null, n.textContent); d.setAttribute("data-sp", "art"); d.setAttribute("data-i", String(parseInt(n.getAttribute("data-i"), 10) || 0)); to.appendChild(d); continue; }
+        if (ctx) {
+          if (n.matches(SEL.think)) { const d = el("div"); d.setAttribute("data-sp", "think"); walk(n, d); to.appendChild(d); continue; }
+          if (n.matches(SEL.art)) {
+            const all = [...document.querySelectorAll(SEL.art)].filter((a) => !(a.parentElement && a.parentElement.closest(SEL.art)));
+            const info = artInfo(n, all.indexOf(n));
+            const d = el("div", null, info.title); d.setAttribute("data-sp", "art"); d.setAttribute("data-i", String(ctx.arts.length));
+            ctx.arts.push(info); to.appendChild(d); continue;
+          }
+        }
+        if (n.classList && n.classList.contains("katex-mathml")) continue;
+        if (DROP.test(tag)) continue;
+        if (tag === "PRE") {
+          const code = n.querySelector("code");
+          const p = el("pre"), c = el("code", null, (code || n).textContent);
+          const m = (((code && code.className) || "") + " " + (n.getAttribute("data-lang") ? "language-" + n.getAttribute("data-lang") : "")).match(/language-([\w+#-]{1,20})/);
+          if (m) p.setAttribute("data-lang", m[1]);
+          p.appendChild(c); to.appendChild(p); continue;
+        }
+        if (!ALLOWED.has(tag)) { walk(n, to); continue; }
+        const c = el(tag.toLowerCase());
+        if (tag === "A") {
+          const h = n.getAttribute("href") || "";
+          if (/^https?:\/\//i.test(h)) { c.setAttribute("href", h); c.setAttribute("target", "_blank"); c.setAttribute("rel", "noopener noreferrer"); }
+        }
+        if ((tag === "TD" || tag === "TH") && n.getAttribute("colspan")) c.setAttribute("colspan", String(parseInt(n.getAttribute("colspan"), 10) || 1));
+        walk(n, c); to.appendChild(c);
+      }
     };
-    // NB: Heter "openUrl" (ikke "open") for ikke å overskrive window.open
-    const openUrl = (url) => window.open(url, "_blank", "noopener");
-    const runShortcut = (name, t) => {
-      window.location.href = "shortcuts://run-shortcut?name=" + enc(name) + "&input=text&text=" + enc(t);
-    };
-    const copy = (t) => {
-      try { if (navigator.clipboard) navigator.clipboard.writeText(t).catch(() => {}); } catch (e) {}
-    };
-    function autosize(el) {
-      const y = window.scrollY;
-      el.style.height = "auto";
-      el.style.height = el.scrollHeight + "px";
-      if (window.scrollY !== y) window.scrollTo(0, y);
+    walk(src, out);
+    return out.innerHTML;
+  }
+  const sanitizeHtml = (html) => sanitizeNode(new DOMParser().parseFromString("<div>" + (html || "") + "</div>", "text/html").body.firstChild);
+
+  /* ---------- Enkel markdown → HTML (for .md-filer og artefakter) ---------- */
+  function mdToHtml(md) {
+    const inline = (s) => esc(s)
+      .replace(/`([^`]+)`/g, "<code>$1</code>")
+      .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+      .replace(/(^|[^*])\*([^*\n]+)\*/g, "$1<em>$2</em>")
+      .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2">$1</a>');
+    const lines = String(md).replace(/\r/g, "").split("\n");
+    let html = "", i = 0, m;
+    while (i < lines.length) {
+      const l = lines[i];
+      if (/^```/.test(l)) {
+        const lang = l.slice(3).trim(), buf = []; i++;
+        while (i < lines.length && !/^```/.test(lines[i])) buf.push(lines[i++]);
+        i++; html += '<pre data-lang="' + esc(lang) + '"><code>' + esc(buf.join("\n")) + "</code></pre>"; continue;
+      }
+      if ((m = l.match(/^(#{1,6})\s+(.*)/))) { html += "<h" + m[1].length + ">" + inline(m[2]) + "</h" + m[1].length + ">"; i++; continue; }
+      if (/^\s*([-*+]|\d+\.)\s+/.test(l)) {
+        const ol = /^\s*\d+\./.test(l), items = [];
+        while (i < lines.length && /^\s*([-*+]|\d+\.)\s+/.test(lines[i])) items.push(lines[i++].replace(/^\s*([-*+]|\d+\.)\s+/, ""));
+        html += (ol ? "<ol>" : "<ul>") + items.map((x) => "<li>" + inline(x) + "</li>").join("") + (ol ? "</ol>" : "</ul>"); continue;
+      }
+      if (/^>\s?/.test(l)) { const b = []; while (i < lines.length && /^>\s?/.test(lines[i])) b.push(lines[i++].replace(/^>\s?/, "")); html += "<blockquote>" + inline(b.join(" ")) + "</blockquote>"; continue; }
+      if (/^\|.*\|\s*$/.test(l) && i + 1 < lines.length && /^\|?\s*:?-{2,}/.test(lines[i + 1])) {
+        const row = (s) => s.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+        const head = row(l); i += 2; const body = [];
+        while (i < lines.length && /^\|.*\|\s*$/.test(lines[i])) body.push(row(lines[i++]));
+        html += "<table><thead><tr>" + head.map((c) => "<th>" + inline(c) + "</th>").join("") + "</tr></thead><tbody>" +
+          body.map((r) => "<tr>" + r.map((c) => "<td>" + inline(c) + "</td>").join("") + "</tr>").join("") + "</tbody></table>"; continue;
+      }
+      if (/^\s*(-{3,}|\*{3,})\s*$/.test(l)) { html += "<hr>"; i++; continue; }
+      if (!l.trim()) { i++; continue; }
+      const p = [];
+      while (i < lines.length && lines[i].trim() && !/^(#{1,6}\s|```|>\s?|\s*([-*+]|\d+\.)\s+)/.test(lines[i])) p.push(lines[i++]);
+      if (!p.length) p.push(lines[i++]);
+      html += "<p>" + inline(p.join(" ")) + "</p>";
     }
+    return html;
+  }
 
-    // ---------- Søkemedier ----------
-    const MEDIA = {
-      google:  (t) => openUrl("https://www.google.com/search?q=" + enc(t)),
-      aimode:  (t) => { copy(t); openUrl("https://www.google.com/search?udm=50&q=" + enc(t)); },
-      youtube: (t) => openUrl("https://www.youtube.com/results?search_query=" + enc(t)),
-      anki:    (t) => runShortcut("InputBrowseAnki", t),
-      claude:  (t) => runShortcut("InputAskClaude", t),
-      sider:   (t) => { copy(t); openUrl("https://sider.ai/no/chat?q=" + enc(t)); }
+  const isSider = /(^|\.)sider\.ai$/i.test(location.hostname);
+  if (isSider) bridge(); else sidebar();
+
+  /* =====================================================================
+     DEL 1: BROEN – kjører bare i sider.ai-vinduet ditt
+     ===================================================================== */
+  function bridge() {
+    const beat = () => GM.setValue(K.hb, String(now()));
+    beat(); setInterval(beat, 1000);
+
+    // Vent til siden har «satt seg» (ditt STM-skript kan bytte til siste chat rett etter innlasting)
+    let lastHref = location.href, hrefSince = now();
+    setInterval(() => {
+      if (location.href !== lastHref) { lastHref = location.href; hrefSince = now(); }
+      if (settled()) { try { if (sessionStorage.getItem(NEWCHAT_FLAG) === "sp") sessionStorage.removeItem(NEWCHAT_FLAG); } catch (e) {} }
+    }, 250);
+    const findInput = () => {
+      const t = document.querySelector(SEL.textarea);
+      if (t && visible(t)) return t;
+      const c = [...document.querySelectorAll(SEL.anyInput)].filter((e) => visible(e) && !e.readOnly && !e.disabled);
+      c.sort((a, b) => b.getBoundingClientRect().bottom - a.getBoundingClientRect().bottom);
+      return c[0] || null;
     };
+    const settled = () => now() - hrefSince > CFG.settleMs && !!findInput();
 
-    const buttons = Array.from(document.querySelectorAll("[data-medium]"));
-    let selected = "google";
-
-    function select(m) {
-      selected = m;
-      const active = m !== "google";
-      buttons.forEach((b) => {
-        const me = b.dataset.medium === m;
-        b.classList.toggle("dim", active && !me);
-        b.setAttribute("aria-pressed", String(active && me));
-      });
-      if (active) {
-        const b = buttons.find((x) => x.dataset.medium === m);
-        chip.textContent = b.textContent.trim();
-        chip.style.color = getComputedStyle(b).backgroundColor;
-        chip.hidden = false;
+    const inputText = (e) => (e.tagName === "TEXTAREA" ? e.value : e.innerText).trim();
+    function fill(e, text) {
+      e.focus({ preventScroll: true });
+      if (e.tagName === "TEXTAREA") {
+        Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set.call(e, text);
+        e.dispatchEvent(new Event("input", { bubbles: true }));
       } else {
-        chip.hidden = true;
+        document.execCommand("selectAll", false);
+        document.execCommand("insertText", false, text);
       }
-      autosize(q);
     }
+    const fire = (e, types, Ctor = MouseEvent) => types.forEach((t) => e.dispatchEvent(new Ctor(t, { bubbles: true, cancelable: true, view: window })));
+    const fireClick = (e) => e && fire(e, ["pointerdown", "mousedown", "pointerup", "mouseup", "click"]);
+    const fireHoverIn = (e) => e && fire(e, ["pointerover", "pointerenter", "mouseover", "mouseenter", "mousemove"]);
+    const isDisabled = (b) => /disabled|not-allowed/.test(b.className) || b.getAttribute("aria-disabled") === "true";
 
-    buttons.forEach((b) => {
-      b.addEventListener("mousedown", (e) => e.preventDefault()); // behold fokus i søkefeltet
-      b.addEventListener("click", () => {
-        const m = b.dataset.medium;
-        const t = q.value.trim();
-        if (t) { MEDIA[m](t); return; }
-        // Tomt søkefelt: velg søkemedium for Enter (trykk igjen / på "Søk" for å nullstille)
-        select(m === "google" || m === selected ? "google" : m);
-        q.focus();
+    // Er Sider i ferd med å svare? («Slutt å generere» er skjult med .invisible/.opacity-0 ellers)
+    function generating() {
+      const r = document.evaluate("//*[text()[normalize-space()='Slutt å generere' or normalize-space()='Stop generating']]",
+        document, null, XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null);
+      for (let i = 0; i < r.snapshotLength; i++) if (visible(r.snapshotItem(i))) return true;
+      return false;
+    }
+    const outermost = (sel, list) => list.filter((e) => !(e.parentElement && e.parentElement.closest(sel)));
+    function answers() {
+      return outermost(SEL.answer, [...document.querySelectorAll(SEL.answer)]).filter((e) => {
+        if (e.closest(SEL.think)) return false;
+        const a = e.closest(".sider-artifact-block");               // artefaktpanel utenfor meldingslisten
+        if (a && !(a.parentElement && a.parentElement.closest(SEL.answer))) return false;
+        return e.getClientRects().length > 0;
       });
-    });
+    }
+    const thinkEls = () => outermost(SEL.think, [...document.querySelectorAll(SEL.think)]);
+    const follows = (a, b) => !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING) && !a.contains(b) && !b.contains(a);
 
-    q.addEventListener("keydown", (e) => {
-      if (e.isComposing || e.keyCode === 229) return;
-      if (e.key === "Enter" && !e.shiftKey && !e.altKey) {
-        e.preventDefault();
-        const t = q.value.trim();
-        if (t) MEDIA[selected](t);
-      } else if (e.key === "Escape" && selected !== "google") {
-        e.preventDefault();
-        select("google");
-      } else if (e.key === "Backspace" && selected !== "google" &&
-                 q.selectionStart === 0 && q.selectionEnd === 0) {
-        e.preventDefault();
-        select("google");
+    const chipCount = () => document.querySelectorAll(SEL.chip).length +
+      [...document.querySelectorAll(SEL.inputArea + " img")].filter(visible).length;
+    function uploadBusy() {
+      const area = document.querySelector(SEL.inputArea);
+      if (!area) return false;
+      return [...area.querySelectorAll('[class*="loading"], [class*="progress"], [class*="spin"]')].some(visible);
+    }
+    function dataUrlToFile(f) {
+      const [head, b64] = f.data.split(",");
+      const bin = atob(b64), u8 = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+      return new File([u8], f.name, { type: f.type || (head.match(/data:([^;]+)/) || [])[1] || "" });
+    }
+    async function attachFiles(files) {
+      const input = document.querySelector(SEL.fileInput);
+      if (!input) throw new Error("Fant ikke filopplastingen i sider.ai-vinduet.");
+      const before = chipCount();
+      const dt = new DataTransfer();
+      files.forEach((f) => dt.items.add(dataUrlToFile(f)));
+      input.files = dt.files;
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+      const t0 = now();
+      while (now() - t0 < 20000 && chipCount() < before + files.length) await sleep(400);
+      while (now() - t0 < 90000 && uploadBusy()) await sleep(400);
+      await sleep(900);
+    }
+    async function submit(input) {
+      const btn = document.querySelector(SEL.send);
+      if (btn) {
+        for (let i = 0; i < 120 && isDisabled(btn); i++) await sleep(250);
+        btn.click();                                           // klikk – ikke Enter (STM blokkerer Enter)
+        await sleep(900);
+        if (!inputText(input) || generating()) return;
       }
-    });
-    q.addEventListener("input", () => autosize(q));
-
-    // ---------- Skriblerier med linjenummer ----------
-    function layoutNotes() {
-      for (let pass = 0; pass < 2; pass++) {
-        const w = notes.clientWidth;
-        mirror.style.width = w + "px";
-        const lines = notes.value.split("\n");
-        const m = document.createDocumentFragment();
-        for (const line of lines) {
-          const d = document.createElement("div");
-          d.textContent = line || "\u200b";
-          m.appendChild(d);
-        }
-        mirror.replaceChildren(m);
-        const g = document.createDocumentFragment();
-        const kids = mirror.children;
-        for (let i = 0; i < kids.length; i++) {
-          const d = document.createElement("div");
-          d.style.height = kids[i].getBoundingClientRect().height + "px";
-          d.textContent = String(i + 1);
-          g.appendChild(d);
-        }
-        gutter.replaceChildren(g);
-        if (notes.clientWidth === w) break; // margbredden endret seg ikke
-      }
-      autosize(notes);
+      const o = { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true };
+      input.dispatchEvent(new KeyboardEvent("keydown", o));
+      input.dispatchEvent(new KeyboardEvent("keyup", o));
+      await sleep(900);
+      if (inputText(input)) throw new Error("Klarte ikke å sende meldingen i sider.ai-vinduet.");
     }
 
-    notes.addEventListener("input", () => { store.set(notes.value); layoutNotes(); });
-    gutter.addEventListener("click", () => notes.focus());
-
-    function reloadNotes() {
-      if (document.activeElement === notes) return;
-      const v = store.get();
-      if (v !== notes.value) { notes.value = v; layoutNotes(); }
-    }
-    window.addEventListener("storage", (e) => { if (e.key === NOTES_KEY) reloadNotes(); });
-    document.addEventListener("visibilitychange", () => { if (!document.hidden) reloadNotes(); });
-    window.addEventListener("pagehide", () => store.set(notes.value));
-
-    let raf = 0;
-    window.addEventListener("resize", () => {
-      cancelAnimationFrame(raf);
-      raf = requestAnimationFrame(() => { autosize(q); layoutNotes(); });
+    const writeRes = (id, status, p, error) => setJ(K.res, {
+      id, status, html: (p && p.html) || "", think: (p && p.think) || "", arts: (p && p.arts) || [], error: error || "", ts: now()
     });
 
-    // ---------- Oppstart ----------
-    q.value = "";
-    notes.value = store.get();
-    autosize(q);
-    layoutNotes();
+    async function capture(req, before) {
+      const t0 = now();
+      let sig = "", stableSince = now();
+      while (now() - t0 < CFG.timeoutMs) {
+        await sleep(500);
+        const list = answers();
+        let target = null;
+        if (list.length > before.count) target = list[list.length - 1];
+        else if (list.length && list[list.length - 1].textContent !== before.lastText) target = list[list.length - 1];
+        const prevA = target ? list[list.indexOf(target) - 1] || null : list[list.length - 1] || null;
+        const thinks = thinkEls().filter((t) => (!prevA || follows(prevA, t)) && (!target || follows(t, target)));
+        if (!target && !thinks.length) continue;
+        const ctx = { arts: [] };
+        const payload = {
+          html: target ? sanitizeNode(target, ctx) : "",
+          think: thinks.map((t) => sanitizeNode(t)).join("<hr>"),
+          arts: ctx.arts
+        };
+        const s = payload.html.length + ":" + payload.think.length + ":" + payload.html.slice(-200) + payload.think.slice(-120);
+        if (s !== sig) { sig = s; stableSince = now(); await writeRes(req.id, "working", payload); }
+        else if (target && target.textContent.trim() && now() - stableSince > CFG.settleMs && !generating()) {
+          await writeRes(req.id, "done", payload); return;
+        }
+      }
+      if (sig) { const r = await getJ(K.res, null); await setJ(K.res, Object.assign(r || {}, { status: "done" })); }
+      else await writeRes(req.id, "error", null, "Fikk ikke noe svar fra Sider innen tidsfristen.");
+    }
 
-    const focusSearch = () => {
-      const a = document.activeElement;
-      if (!a || a === document.body || a === document.documentElement) q.focus({ preventScroll: true });
+    async function handle(req) {
+      if (req.newChat && (await GM.getValue(K.nav, "")) !== req.id) {
+        await GM.setValue(K.nav, req.id);
+        await writeRes(req.id, "working", null);
+        try { sessionStorage.setItem(NEWCHAT_FLAG, "sp"); } catch (e) {}   // hindrer «åpne siste chat» i STM-skriptet ditt
+        location.href = CFG.chatUrl;
+        return;
+      }
+      for (let i = 0; i < 80 && !settled(); i++) await sleep(250);
+      const input = findInput();
+      if (!input) throw new Error("Fant ikke tekstfeltet på sider.ai. Er du logget inn?");
+      let files = [];
+      if (req.fileCount) {
+        const fr = await getJ(K.reqFiles, null);
+        files = fr && fr.id === req.id ? fr.files : [];
+        if (!files.length) throw new Error("Vedleggene kom ikke fram til sider.ai-vinduet.");
+      }
+      if (chipCount() > 0) throw new Error("Tekstfeltet i sider.ai-vinduet har allerede vedlegg (f.eks. et gjenopprettet utkast). Send eller fjern dem der først, så de ikke blir sendt med.");
+
+      const list = answers();
+      const before = { count: list.length, lastText: list.length ? list[list.length - 1].textContent : null };
+      await GM.setValue(K.done, req.id);                   // aldri dobbel sending ved omlasting
+      await writeRes(req.id, "working", null);
+      const draft = inputText(input);                      // ditt uferdige utkast i Sider-vinduet
+      fill(input, req.prompt);
+      if (files.length) { await attachFiles(files); await GM.deleteValue(K.reqFiles); }
+      await sleep(300);
+      await submit(input);
+      if (draft) setTimeout(() => { const t = findInput(); if (t && !inputText(t)) fill(t, draft); }, 1500);
+      await capture(req, before);
+    }
+
+    /* ---------- Modeller og «Tenk» ---------- */
+    const ownText = (e) => [...e.childNodes].filter((n) => n.nodeType === 3).map((n) => n.nodeValue).join("").trim();
+    const chipByText = (re) => {
+      const box = document.querySelector(".chat-input-box");
+      return box ? [...box.querySelectorAll("div, span, button")].find((e) => re.test(ownText(e))) || null : null;
     };
-    focusSearch();
-    window.addEventListener("pageshow", focusSearch);
-  })();
-  </script>
-</body>
-</html>
+    const thinkEl = () => chipByText(/^(Tenk|Think|Thinking)$/i);
+    function thinkState() {
+      const e = thinkEl();
+      if (!e || !visible(e)) return { available: false, on: false };
+      const cs = getComputedStyle(e);
+      const available = !/disabled|not-allowed/.test(e.className) && parseFloat(cs.opacity) >= 0.5;
+      const ref = chipByText(/^(Verktøy|Tools)$/i);
+      const on = ref ? (cs.color !== getComputedStyle(ref).color || cs.backgroundColor !== getComputedStyle(ref).backgroundColor)
+                     : /primary|active|selected|brand/.test(e.className);
+      return { available, on };
+    }
+    const activeModelName = () => {
+      const b = document.querySelector(SEL.modelBtn), s = b && b.querySelector("span");
+      return ((s ? s.textContent : b ? b.textContent : "") || "").replace(/\s+/g, " ").trim();
+    };
+    const visiblePopovers = () => [...document.querySelectorAll(SEL.popover)].filter((p) => p.getBoundingClientRect().width > 0);
+    async function closePopovers() {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await sleep(100);
+      if (visiblePopovers().length) { fireClick(document.body); await sleep(150); }
+    }
+    async function openMainPopover() {
+      const b = document.querySelector(SEL.modelBtn); if (!b) return null;
+      fireClick(b);
+      for (let i = 0; i < 30; i++) {
+        const t = document.querySelector(SEL.popover + " " + SEL.modelTitle);
+        if (t) { await sleep(120); return t.closest(".chatBox-popover"); }
+        await sleep(100);
+      }
+      return null;
+    }
+    async function openOtherModels(main) {
+      const andre = [...main.querySelectorAll("div.cursor-pointer, div")].find((d) => /^Andre modeller/i.test(d.textContent.trim()) && d.textContent.length < 40);
+      if (!andre) return null;
+      fireHoverIn(andre); await sleep(450);
+      let sub = visiblePopovers().filter((p) => p !== main && p.querySelector(SEL.modelTitle));
+      if (!sub.length) { fireClick(andre); await sleep(500); sub = visiblePopovers().filter((p) => p !== main && p.querySelector(SEL.modelTitle)); }
+      return sub[0] || null;
+    }
+    const norm = (s) => (s || "").replace(/\s+/g, " ").trim().toLowerCase();
+    async function selectModel(name) {
+      try {
+        const main = await openMainPopover(); if (!main) return;
+        const find = (r) => [...r.querySelectorAll(SEL.modelTitle)].find((t) => norm(t.textContent) === norm(name));
+        let item = find(main);
+        if (!item) { const sub = await openOtherModels(main); if (sub) item = find(sub); }
+        if (item) { fireClick(item); await sleep(250); }
+      } finally { await closePopovers(); }
+    }
+    async function harvestModels() {
+      const out = [];
+      try {
+        const main = await openMainPopover(); if (!main) return;
+        main.querySelectorAll(SEL.modelTitle).forEach((t) => out.push({ name: t.textContent.replace(/\s+/g, " ").trim(), category: null, count: null }));
+        const sub = await openOtherModels(main);
+        if (sub) sub.querySelectorAll(SEL.modelTitle).forEach((t) => { const n = t.textContent.replace(/\s+/g, " ").trim(); if (!out.some((m) => m.name === n)) out.push({ name: n, category: "Andre modeller", count: null }); });
+      } finally { await closePopovers(); }
+      if (out.length) await setJ(K.models, out);
+    }
+    let lastState = "";
+    async function publishState() {
+      let models = null;
+      try { const c = JSON.parse(localStorage.getItem(STM_MODEL_CACHE) || "null"); if (c && c.models) models = c.models.map((m) => ({ name: m.name, category: m.category || null, count: m.count == null ? null : m.count })); } catch (e) {}
+      if (!models) models = await getJ(K.models, []);
+      const s = JSON.stringify({ active: activeModelName(), models, think: thinkState() });
+      if (s !== lastState) { lastState = s; await GM.setValue(K.state, s); }
+    }
+    async function runCmd(cmd) {
+      if (cmd.type === "model") await selectModel(cmd.name);
+      else if (cmd.type === "think") { const e = thinkEl(); if (e) e.click(); await sleep(300); }
+      else if (cmd.type === "harvest") await harvestModels();
+      else if (cmd.type === "art") {
+        const all = [...document.querySelectorAll(SEL.art)].filter((a) => !(a.parentElement && a.parentElement.closest(SEL.art)));
+        if (all[cmd.gi]) { all[cmd.gi].scrollIntoView({ block: "center" }); fireClick(all[cmd.gi]); }
+      }
+      lastState = ""; await publishState();
+    }
+
+    let busy = false;
+    setInterval(async () => {
+      if (busy) return;
+      busy = true;
+      try {
+        const req = await getJ(K.req, null);
+        if (req && req.id && (await GM.getValue(K.done, "")) !== req.id) {
+          if (now() - req.ts > 10 * 60 * 1000) await GM.setValue(K.done, req.id);   // gamle forespørsler ignoreres
+          else {
+            try { await handle(req); }
+            catch (e) { await GM.setValue(K.done, req.id); await writeRes(req.id, "error", null, e.message || String(e)); }
+          }
+        } else {
+          const q = await getJ(K.cmd, []);
+          if (Array.isArray(q) && q.length && settled()) {
+            const done = (await getJ(K.cmdDone, [])) || [];
+            for (const cmd of q) {
+              if (!cmd || !cmd.id || done.includes(cmd.id)) continue;
+              done.push(cmd.id); await setJ(K.cmdDone, done.slice(-40));
+              if (now() - cmd.ts < 60000) await runCmd(cmd);
+            }
+          }
+          if (settled()) await publishState();
+        }
+      } catch (e) {}
+      busy = false;
+    }, 700);
+  }
+
+  /* =====================================================================
+     DEL 2: SIDEPANELET – kjører på alle andre nettsider
+     ===================================================================== */
+  function sidebar() {
+    const host = document.createElement("sider-sidepanel");
+    host.style.cssText = "all:initial;position:fixed;top:0;left:0;width:0;height:0;z-index:2147483647;";
+    const root = host.attachShadow({ mode: "closed" });
+
+    root.innerHTML = `
+<style>
+  :host { all: initial; }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  .wrap {
+    --accent:#7F60FE; --fs:15px;
+    --bg:#FFFFFF; --fg:#1A1A1A; --muted:#8A867C; --line:#E8E5DA; --soft:#F6F4EC; --code:#F4F2EA;
+    font: var(--fs)/1.5 -apple-system, system-ui, "Helvetica Neue", Arial, sans-serif; color: var(--fg);
+    -webkit-text-size-adjust: 100%;
+  }
+  .wrap[data-theme="dark"]  { --bg:#1C1C1E; --fg:#ECECEC; --muted:#8E8E93; --line:#3A3A3C; --soft:#2C2C2E; --code:#2C2C2E; }
+  .wrap[data-theme="sepia"] { --bg:#F7F0E1; --fg:#4A3B2A; --muted:#9A8B72; --line:#E4D8BF; --soft:#EFE5CF; --code:#EDE2C8; }
+  .wrap[data-theme="night"] { --bg:#0D1117; --fg:#C9D1D9; --muted:#7D8590; --line:#30363D; --soft:#161B22; --code:#161B22; }
+  .wrap { --user: color-mix(in srgb, var(--accent) 14%, var(--bg)); }
+  button { font: inherit; color: inherit; }
+
+  /* Flytende knapp */
+  .fab { position: fixed; right: 0; width: 40px; height: 44px; display: flex; align-items: center; justify-content: center;
+    border-radius: 22px 0 0 22px; background: var(--accent); color: #fff; font: 600 17px/1 -apple-system, system-ui, sans-serif;
+    box-shadow: 0 2px 10px rgba(0,0,0,.18); opacity: .85; cursor: pointer; touch-action: none; user-select: none; -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent; transition: opacity .15s, transform .2s; }
+  .fab:hover { opacity: 1; }
+  .fab.hidden { transform: translateX(110%); }
+  .fab.busy::after, .fab.news::after { content:""; position:absolute; top:6px; left:6px; width:8px; height:8px; border-radius:50%; }
+  .fab.busy::after { background:#FFC72C; animation: pulse 1s ease-in-out infinite; }
+  .fab.news::after { background:#3DDC84; }
+  @keyframes pulse { 50% { opacity: .3; } }
+
+  /* Panel */
+  .panel { position: fixed; top: 0; display: flex; flex-direction: row; transform: translateX(110%); visibility: hidden;
+    transition: transform .22s ease, visibility 0s linear .22s; box-shadow: -8px 0 30px rgba(0,0,0,.12); }
+  .panel.open { transform: none; visibility: visible; transition: transform .22s ease; }
+  .panel.ov { background: rgba(0,0,0,.22); box-shadow: none; }
+  .grip { position: absolute; left: -7px; top: 0; bottom: 0; width: 14px; cursor: ew-resize; touch-action: none; z-index: 400; }
+  .grip::after { content:""; position:absolute; left:5px; top:50%; width:4px; height:44px; margin-top:-22px; border-radius:2px;
+    background: var(--muted); opacity:.35; transition: opacity .15s; }
+  .grip:hover::after, .grip.drag::after { opacity: .9; background: var(--accent); }
+  .ov .grip { display: none; }
+  .cols { position: relative; height: 100%; flex: none; display: flex; flex-direction: row-reverse; }
+  .ov .cols { flex: 1; display: block; }
+  .s1, .col { position: relative; height: 100%; flex: none; background: var(--bg); border-left: 1px solid var(--line); overflow: hidden; }
+  .ov .s1, .ov .col { position: absolute; top: 0; box-shadow: -6px 0 18px rgba(0,0,0,.18); }
+  .ov .col { cursor: pointer; }
+  .s1 { display: flex; flex-direction: column; }
+  .track { position: absolute; top: 0; left: 0; right: 0; will-change: transform; }
+  .col.blank::after { content: "Ingen tidligere tekst"; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+    color: var(--muted); font-size: 12px; opacity: .6; }
+
+  header { display: flex; align-items: center; gap: .2rem; padding: .35rem .4rem; border-bottom: 1px solid var(--line); flex: none; min-width: 0; }
+  .title { font-weight: 700; font-size: 15px; padding: 0 .15rem; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: #C9C5BB; flex: none; }
+  .dot.on { background: #3DDC84; }
+  .stxt { flex: 1; min-width: 0; font-size: 11px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ic { border: 0; background: transparent; color: var(--muted); font-size: 14px; width: 28px; height: 28px; border-radius: .45rem;
+    cursor: pointer; flex: none; padding: 0; -webkit-tap-highlight-color: transparent; }
+  .ic:hover, .ic.on { background: var(--soft); color: var(--fg); }
+  .ic.on { color: var(--accent); }
+
+  .settings { padding: .5rem .6rem; border-bottom: 1px solid var(--line); font-size: 12px; display: grid; gap: .45rem; flex: none; }
+  .srow { display: flex; align-items: center; gap: .4rem; flex-wrap: wrap; }
+  .srow > span:first-child { color: var(--muted); width: 3.2em; }
+  .seg { display: flex; flex-wrap: wrap; gap: .2rem; align-items: center; }
+  .seg button { border: 1px solid var(--line); background: var(--bg); border-radius: .4rem; padding: .1rem .4rem; font-size: 12px; cursor: pointer; }
+  .seg button.on { border-color: var(--accent); color: var(--accent); }
+  .sw { display: flex; gap: .3rem; flex-wrap: wrap; }
+  .sw button { width: 20px; height: 20px; border-radius: 50%; border: 2px solid transparent; cursor: pointer; padding: 0; }
+  .sw button.on { border-color: var(--fg); }
+
+  .msgs { flex: 1; min-height: 0; overflow-y: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; overscroll-behavior: contain; }
+  .msgs::-webkit-scrollbar { display: none; }
+  .content { padding: .6rem .65rem; display: flex; flex-direction: column; gap: .7rem; font-size: var(--fs); overflow-wrap: anywhere; }
+  .empty { color: var(--muted); font-size: 13px; text-align: center; padding: 2rem .5rem; }
+  .empty a { color: var(--accent); }
+  .u { display: flex; flex-direction: column; align-items: flex-end; gap: .3rem; }
+  .user { background: var(--user); padding: .45rem .7rem; border-radius: .9rem .9rem .25rem .9rem; white-space: pre-wrap; max-width: 92%; }
+  .quote { align-self: stretch; border-left: 3px solid var(--accent); padding: .3rem .55rem; background: var(--soft); border-radius: .3rem;
+    font-size: .88em; white-space: pre-wrap; }
+  .qlbl, .flbl, .tlbl { font-size: 11px; color: var(--muted); user-select: none; -webkit-user-select: none; }
+  .fold { align-self: stretch; background: var(--soft); border-radius: .4rem; padding: .3rem .55rem; cursor: pointer; font-size: .85em; }
+  .ftxt { white-space: pre-wrap; color: var(--muted); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .fold.open .ftxt { display: block; color: var(--fg); }
+  .fchip { display: inline-flex; align-items: center; gap: .35rem; border: 1px solid var(--line); background: var(--bg); border-radius: .5rem;
+    padding: .2rem .45rem; font-size: 12px; cursor: pointer; max-width: 100%; }
+  .fchip img { width: 34px; height: 34px; object-fit: cover; border-radius: .3rem; }
+  .ai.err { color: #C0392B; font-size: 13px; }
+  .think { border-left: 2px solid var(--line); padding-left: .55rem; margin-bottom: .5rem; cursor: pointer; color: var(--muted); }
+  .think .tbody { display: none; color: var(--muted); font-size: .9em; }
+  .think.open .tbody { display: block; }
+  .think .tbody * { color: var(--muted) !important; }
+  .art { display: flex; align-items: center; gap: .4rem; width: 100%; text-align: left; border: 1px solid var(--line); background: var(--soft);
+    border-radius: .55rem; padding: .45rem .6rem; margin: .4rem 0; cursor: pointer; font-size: .9em; }
+  .art:hover { border-color: var(--accent); }
+  .meta { display: flex; gap: .2rem; margin-top: .2rem; }
+  .meta .ic { width: auto; height: auto; font-size: 11px; padding: .1rem .4rem; }
+  .typing { color: var(--muted); font-size: 12px; }
+  .typing .ic { width: auto; height: auto; font-size: 11px; padding: .1rem .4rem; }
+
+  .md p { margin: 0 0 .6em; } .md > :last-child { margin-bottom: 0; }
+  .md h1,.md h2,.md h3,.md h4 { margin: .8em 0 .4em; line-height: 1.25; } .md h1{font-size:1.3em} .md h2{font-size:1.15em} .md h3{font-size:1.05em}
+  .md ul,.md ol { margin: 0 0 .6em; padding-left: 1.3em; } .md li { margin: .15em 0; }
+  .md code { font: .87em/1.45 ui-monospace, Menlo, monospace; background: var(--code); padding: .1em .3em; border-radius: .3em; }
+  .md pre { background: var(--code); padding: .6em .7em; border-radius: .5em; overflow-x: auto; margin: 0 0 .6em; }
+  .md pre code { background: none; padding: 0; white-space: pre; }
+  .md blockquote { margin: 0 0 .6em; padding-left: .8em; border-left: 3px solid var(--line); color: var(--muted); }
+  .md table { border-collapse: collapse; margin: 0 0 .6em; font-size: .87em; display: block; overflow-x: auto; }
+  .md th,.md td { border: 1px solid var(--line); padding: .3em .5em; text-align: left; }
+  .md a { color: var(--accent); }
+  .md hr { border: 0; border-top: 1px solid var(--line); margin: .8em 0; }
+
+  .composer { position: relative; border-top: 1px solid var(--line); padding: .45rem .5rem .55rem; flex: none; }
+  .chips { display: flex; flex-wrap: wrap; gap: .25rem; margin-bottom: .35rem; }
+  .chip { border: 1px solid var(--line); background: var(--bg); color: var(--muted); font-size: 11.5px; padding: .12rem .45rem;
+    border-radius: 999px; cursor: pointer; white-space: nowrap; }
+  .chip.on { border-color: var(--accent); color: var(--accent); }
+  .chip.yt { border-color: #FF0032; color: #FF0032; }
+  .atts { display: flex; flex-wrap: wrap; gap: .25rem; }
+  .atts:not(:empty) { margin-bottom: .35rem; }
+  .att { background: var(--soft); border: 0; border-radius: 999px; font-size: 11px; padding: .12rem .5rem; cursor: pointer; max-width: 100%;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mrow { display: flex; gap: .3rem; margin-bottom: .35rem; }
+  .model { flex: 1; min-width: 0; text-align: left; border: 1px solid var(--line); background: var(--bg); border-radius: .5rem;
+    font-size: 12px; padding: .2rem .45rem; cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .thinkbtn { flex: none; border: 1px solid var(--line); background: var(--bg); border-radius: .5rem; font-size: 12px; padding: .2rem .5rem; cursor: pointer; }
+  .thinkbtn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .thinkbtn:disabled { opacity: .35; cursor: default; }
+  .mpop { position: absolute; left: .4rem; right: .4rem; bottom: 100%; max-height: 55vh; overflow-y: auto; background: var(--bg);
+    border: 1px solid var(--line); border-radius: .6rem; box-shadow: 0 8px 24px rgba(0,0,0,.18); padding: .3rem; font-size: 12.5px; z-index: 5; }
+  .mcat { font-size: 10px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); padding: .35rem .4rem .15rem; }
+  .mitem { display: block; width: 100%; text-align: left; border: 0; background: transparent; border-radius: .4rem; padding: .3rem .45rem; cursor: pointer; }
+  .mitem:hover { background: var(--soft); }
+  .mitem.on { color: var(--accent); font-weight: 600; }
+  .mitem small { color: var(--muted); }
+  .box { display: flex; align-items: flex-end; gap: .3rem; border: 1px solid var(--line); border-radius: .8rem; padding: .25rem .25rem .25rem .55rem; background: var(--bg); }
+  .box:focus-within { border-color: var(--accent); }
+  textarea { flex: 1; min-width: 0; border: 0; outline: 0; resize: none; background: transparent; color: var(--fg);
+    font: max(16px, var(--fs))/1.35 -apple-system, system-ui, sans-serif; max-height: 40vh; padding: .3rem 0; }
+  .send { flex: none; width: 32px; height: 32px; border: 0; border-radius: 50%; background: var(--accent); color: #fff; font-size: 16px; cursor: pointer; }
+  .send:disabled { opacity: .35; cursor: default; }
+
+  .viewer { height: 100%; flex: none; display: flex; flex-direction: column; background: var(--bg); border-left: 1px solid var(--line); position: relative; z-index: 300; }
+  .vtitle { flex: 1; min-width: 0; font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding-left: .3rem; }
+  .vbody { flex: 1; overflow: auto; padding: .6rem .7rem; font-size: var(--fs); -webkit-overflow-scrolling: touch; }
+  .vbody img { max-width: 100%; height: auto; border-radius: .4rem; }
+  .vbody iframe, .vbody object { width: 100%; height: calc(100% - .2rem); border: 0; background: #fff; border-radius: .3rem; }
+  .vbody pre { white-space: pre; }
+  .vnote { color: var(--muted); font-size: 13px; }
+  .flash { position: absolute; left: .5rem; right: .5rem; bottom: calc(100% + .3rem); background: var(--fg); color: var(--bg); font-size: 12px;
+    padding: .35rem .55rem; border-radius: .45rem; z-index: 6; }
+</style>
+<div class="wrap">
+  <div class="fab" title="Sider (¨)">✦</div>
+  <div class="panel">
+    <div class="grip" title="Dra for å endre bredden"></div>
+    <div class="cols">
+      <section class="s1">
+        <header>
+          <button class="ic" data-act="overview" title="Oversikt over hele samtalen">⧉</button>
+          <span class="title">Sider</span>
+          <span class="dot"></span>
+          <span class="stxt"></span>
+          <button class="ic" data-act="settings" title="Utseende">⚙︎</button>
+          <button class="ic" data-act="new" title="Ny samtale">✎</button>
+          <button class="ic" data-act="close" title="Lukk (¨)">✕</button>
+        </header>
+        <div class="settings" hidden>
+          <div class="srow"><span>Tema</span><div class="seg" data-set="theme">
+            <button data-v="auto">Auto</button><button data-v="light">Lys</button><button data-v="dark">Mørk</button><button data-v="sepia">Sepia</button><button data-v="night">Natt</button></div></div>
+          <div class="srow"><span>Farge</span><div class="sw" data-set="accent">${CFG.accents.map((c) => `<button data-v="${c}" style="background:${c}" title="${c}"></button>`).join("")}</div></div>
+          <div class="srow"><span>Tekst</span><div class="seg"><button data-act="fs-">A−</button><span class="fsv"></span><button data-act="fs+">A+</button></div></div>
+        </div>
+        <div class="msgs"></div>
+        <div class="composer">
+          <div class="mpop" hidden></div>
+          <div class="chips">
+            <button class="chip" data-act="sel">+ Markering</button>
+            <button class="chip" data-act="page">+ All tekst</button>
+            <button class="chip" data-act="pickimg">Bilde</button>
+            <button class="chip" data-act="pickfile">Fil</button>
+            <button class="chip yt" data-act="ytsum" hidden>▶ Oppsummer video</button>
+            <button class="chip yt" data-act="ytnow" hidden>▶ Utdrag rundt nå</button>
+          </div>
+          <div class="atts"></div>
+          <div class="mrow">
+            <button class="model" data-act="models" title="Velg modell">Modell …</button>
+            <button class="thinkbtn" data-act="think" title="Tenkemodus">Tenk</button>
+          </div>
+          <div class="box">
+            <textarea rows="1" placeholder="Spør Sider …"></textarea>
+            <button class="send" data-act="send" title="Send (Enter)">↑</button>
+          </div>
+          <input type="file" class="fimg" accept="image/*" multiple hidden>
+          <input type="file" class="ffile" multiple hidden>
+        </div>
+      </section>
+    </div>
+    <section class="viewer" hidden>
+      <header><span class="vtitle"></span><button class="ic" data-act="vclose" title="Lukk">✕</button></header>
+      <div class="vbody"></div>
+    </section>
+  </div>
+</div>`;
+
+    const $ = (s) => root.querySelector(s);
+    const wrap = $(".wrap"), fab = $(".fab"), panel = $(".panel"), grip = $(".grip"), cols = $(".cols"), s1 = $(".s1");
+    const msgs = $(".msgs"), ta = $("textarea"), dot = $(".dot"), stxt = $(".stxt"), sendBtn = $(".send");
+    const settingsEl = $(".settings"), mpop = $(".mpop"), modelBtn = $(".model"), thinkBtn = $(".thinkbtn");
+    const attsEl = $(".atts"), composer = $(".composer"), viewerEl = $(".viewer"), vtitle = $(".vtitle"), vbody = $(".vbody");
+    const selChip = $('[data-act="sel"]'), ytChips = [...root.querySelectorAll(".chip.yt")];
+    const fimg = $(".fimg"), ffile = $(".ffile");
+
+    let S = { theme: "auto", accent: CFG.accents[0], fs: 15 };
+    let W = CFG.defaultWidth, isOpen = false, overview = false, activeK = 1, viewer = null;
+    let hist = [], lastVer = null, pending = null, live = null, bridgeOn = false, bstate = null;
+    let atts = [], files = [], lastSel = null, lastSig = "", stick = true, seenAi = -1;
+    const openSet = new Set();
+    let colEls = [];
+
+    /* ---------- Innstillinger (huskes på tvers av faner og økter) ---------- */
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    function applySettings() {
+      const theme = S.theme === "auto" ? (mq.matches ? "dark" : "light") : S.theme;
+      wrap.setAttribute("data-theme", theme);
+      wrap.style.setProperty("--accent", S.accent);
+      wrap.style.setProperty("--fs", S.fs + "px");
+      $(".fsv").textContent = S.fs + " px";
+      root.querySelectorAll('[data-set="theme"] button').forEach((b) => b.classList.toggle("on", b.dataset.v === S.theme));
+      root.querySelectorAll('[data-set="accent"] button').forEach((b) => b.classList.toggle("on", b.dataset.v.toLowerCase() === S.accent.toLowerCase()));
+    }
+    mq.addEventListener && mq.addEventListener("change", applySettings);
+    const saveSettings = () => { setJ(K.settings, S); applySettings(); layout(); };
+
+    /* ---------- Husk siste markering (iOS fjerner den når du trykker i panelet) ---------- */
+    document.addEventListener("selectionchange", () => {
+      const s = document.getSelection();
+      if (!s || s.isCollapsed || s.anchorNode === host || host.contains(s.anchorNode)) return;
+      const t = s.toString().trim();
+      if (t) { lastSel = t; selChip.classList.add("on"); selChip.textContent = "+ Markering (" + t.length + ")"; }
+    });
+
+    /* =================================================================
+       GEOMETRI: bredde, kolonner, oversikt, dytting av nettsiden
+       ================================================================= */
+    const colMin = () => Math.round(S.fs * 14);                 // 210 px ved 15 px tekst
+    const viewerW = () => Math.max(300, Math.round(colMin() * 1.5));
+    let pushPx = 0;
+    function setPush(px) {
+      if (px === pushPx) return;
+      pushPx = px;
+      const h = document.documentElement.style;
+      if (px > 0) {
+        h.setProperty("margin-right", px + "px", "important");
+        h.setProperty("width", "auto", "important");
+        h.setProperty("min-width", "0", "important");
+        h.setProperty("overflow-x", "hidden", "important");
+      } else ["margin-right", "width", "min-width", "overflow-x"].forEach((p) => h.removeProperty(p));
+    }
+    function ensureCols(count) {
+      while (colEls.length < count) {
+        const c = el("section", "col"); c.dataset.k = String(colEls.length + 2);
+        c.track = el("div", "track"); c.appendChild(c.track);
+        const content = msgs.firstChild; if (content) c.track.appendChild(content.cloneNode(true));
+        cols.appendChild(c); colEls.push(c);
+      }
+      while (colEls.length > count) colEls.pop().remove();
+    }
+    let geo = { vw: 0, vh: 0, w: 0 };
+    function layout() {
+      const vv = window.visualViewport, zoomed = !vv || Math.abs(vv.scale - 1) > 0.01;
+      const vw = zoomed ? window.innerWidth : vv.width, vh = zoomed ? window.innerHeight : vv.height;
+      const top = zoomed ? 0 : vv.offsetTop, left0 = zoomed ? 0 : vv.offsetLeft;
+      const vwW = viewer ? Math.min(viewerW(), vw - 140) : 0;
+      W = clamp(W, 160, Math.max(160, vw - 60 - vwW));
+      const n = Math.max(1, Math.floor(W / colMin())), w = Math.floor(W / n), colsW = n * w;
+      geo = { vw, vh, w };
+      let totalW;
+      panel.classList.toggle("ov", overview);
+      if (!overview) {
+        ensureCols(n - 1);
+        cols.style.width = colsW + "px";
+        [s1, ...colEls].forEach((c) => { c.style.width = w + "px"; c.style.left = ""; c.style.zIndex = ""; });
+        totalW = colsW + vwW;
+      } else {
+        totalW = vw;
+        cols.style.width = "";
+        const x1 = vw - vwW - w;
+        const needed = 1 + Math.max(0, Math.ceil(msgs.scrollTop / vh));
+        const fit = 1 + Math.max(0, Math.floor(x1 / (w / 2)));
+        ensureCols(Math.max(1, Math.min(needed, fit)) - 1);
+        s1.style.width = w + "px"; s1.style.left = x1 + "px"; s1.style.zIndex = activeK === 1 ? "150" : "100";
+        colEls.forEach((c, i) => {
+          const k = i + 2;
+          c.style.width = w + "px"; c.style.left = Math.round(x1 - (k - 1) * w / 2) + "px";
+          c.style.zIndex = activeK === k ? "150" : String(100 - k);
+        });
+      }
+      viewerEl.style.width = vwW + "px";
+      panel.style.width = totalW + "px";
+      panel.style.height = vh + "px";
+      panel.style.top = top + "px";
+      panel.style.left = (left0 + vw - totalW) + "px";
+      if (!overview) setPush(isOpen ? colsW + vwW : 0);
+      syncCols();
+    }
+    function syncCols() {
+      const sTop = msgs.scrollTop;
+      let acc = 0;
+      for (const c of colEls) {
+        const H = c.clientHeight; acc += H;
+        const off = sTop - acc;
+        c.track.style.transform = "translateY(" + (-off) + "px)";
+        c.classList.toggle("blank", off + H <= 0);
+      }
+    }
+    let scrollRaf = 0;
+    msgs.addEventListener("scroll", () => {
+      stick = msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 60;
+      cancelAnimationFrame(scrollRaf);
+      scrollRaf = requestAnimationFrame(() => (overview ? layout() : syncCols()));
+    }, { passive: true });
+    // Rulling i de andre tekstseksjonene ruller alle samtidig
+    cols.addEventListener("wheel", (e) => {
+      if (!e.target.closest || !e.target.closest(".col")) return;
+      e.preventDefault(); msgs.scrollTop += e.deltaY;
+    }, { passive: false });
+    let touchY = null;
+    cols.addEventListener("touchstart", (e) => { if (e.target.closest && e.target.closest(".col")) touchY = e.touches[0].clientY; }, { passive: true });
+    cols.addEventListener("touchmove", (e) => {
+      if (touchY == null) return;
+      const y = e.touches[0].clientY; msgs.scrollTop += touchY - y; touchY = y; e.preventDefault();
+    }, { passive: false });
+    cols.addEventListener("touchend", () => { touchY = null; });
+
+    /* ---------- Dra i venstre kant for å endre bredden ---------- */
+    let gdrag = null;
+    grip.addEventListener("pointerdown", (e) => { gdrag = { x: e.clientX, w: W }; grip.setPointerCapture(e.pointerId); grip.classList.add("drag"); panel.style.transition = "none"; });
+    grip.addEventListener("pointermove", (e) => { if (!gdrag) return; W = gdrag.w + (gdrag.x - e.clientX); layout(); });
+    const gend = () => { if (!gdrag) return; gdrag = null; grip.classList.remove("drag"); panel.style.transition = ""; GM.setValue(K.width, String(W)); };
+    grip.addEventListener("pointerup", gend); grip.addEventListener("pointercancel", gend);
+
+    /* ---------- Hold panelet innenfor det synlige området (iPad-tastaturlinjen) ---------- */
+    if (window.visualViewport) {
+      const vvUpd = () => { if (isOpen) layout(); };
+      visualViewport.addEventListener("resize", vvUpd);
+      visualViewport.addEventListener("scroll", vvUpd);
+    }
+    window.addEventListener("resize", () => { placeFab(); if (isOpen) layout(); });
+
+    /* =================================================================
+       ÅPNE / LUKKE
+       ================================================================= */
+    function setOpen(v, focus) {
+      isOpen = v;
+      panel.classList.toggle("open", v);
+      fab.classList.toggle("hidden", v);
+      if (!v) { overview = false; activeK = 1; mpop.hidden = true; setPush(0); }
+      else { fab.classList.remove("news"); layout(); tick(); if (focus) ta.focus({ preventScroll: true }); }
+      GM.setValue(K.open, v ? "1" : "");
+    }
+    const toggle = () => setOpen(!isOpen, true);
+    function setOverview(v) {
+      overview = v; activeK = 1;
+      $('[data-act="overview"]').classList.toggle("on", v);
+      layout();
+    }
+
+    // Flytende knapp: trykk = åpne, dra = flytt opp/ned
+    let fabY = Math.round(window.innerHeight * 0.45), fdrag = null;
+    function placeFab() { fabY = clamp(fabY, 8, window.innerHeight - 52); fab.style.top = fabY + "px"; }
+    fab.addEventListener("pointerdown", (e) => { fdrag = { y: e.clientY, s: fabY, moved: false }; fab.setPointerCapture(e.pointerId); });
+    fab.addEventListener("pointermove", (e) => {
+      if (!fdrag) return; const dy = e.clientY - fdrag.y;
+      if (Math.abs(dy) > 6) fdrag.moved = true;
+      if (fdrag.moved) { fabY = fdrag.s + dy; placeFab(); }
+    });
+    fab.addEventListener("pointerup", () => { if (!fdrag) return; const m = fdrag.moved; fdrag = null; if (m) GM.setValue(K.fabY, String(fabY)); else setOpen(true, true); });
+    fab.addEventListener("pointercancel", () => { fdrag = null; });
+
+    // (1) Hurtigtast: Fn+¨ (eller ⌃+¨, eller bare ¨ når du ikke skriver i et tekstfelt)
+    window.addEventListener("keydown", (e) => {
+      const uml = e.code === "BracketRight" || e.key === "¨";
+      if (!uml || e.metaKey || e.altKey || e.shiftKey || e.isComposing) return;
+      const fn = e.getModifierState && e.getModifierState("Fn");
+      const ae = document.activeElement === host ? root.activeElement : document.activeElement;
+      const editable = ae && (ae.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName));
+      if (fn || e.ctrlKey || !editable) { e.preventDefault(); e.stopPropagation(); toggle(); }
+    }, true);
+
+    // Tastetrykk i panelet skal ikke utløse nettsidens egne hurtigtaster
+    for (const ev of ["keydown", "keyup", "keypress"]) panel.addEventListener(ev, (e) => e.stopPropagation());
+    panel.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      if (!mpop.hidden) mpop.hidden = true; else if (overview) setOverview(false); else if (viewer) closeViewer(); else setOpen(false);
+    });
+
+    /* =================================================================
+       SKRIVEFELT, VEDLEGG, FILER
+       ================================================================= */
+    const autosize = () => { ta.style.height = "auto"; ta.style.height = Math.min(ta.scrollHeight, window.innerHeight * 0.4) + "px"; };
+    ta.addEventListener("input", autosize);
+    ta.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && !e.shiftKey && !e.altKey && !e.isComposing && e.keyCode !== 229) { e.preventDefault(); send(); }
+    });
+    ta.addEventListener("paste", (e) => {
+      const cd = e.clipboardData; if (!cd) return;
+      const fl = [...(cd.files || [])];
+      if (!fl.length) return;
+      if (!cd.getData("text/plain")) e.preventDefault();
+      addFiles(fl);
+    });
+
+    let flashT = 0;
+    function flash(msg) {
+      let f = composer.querySelector(".flash");
+      if (!f) { f = el("div", "flash"); composer.appendChild(f); }
+      f.textContent = msg; clearTimeout(flashT); flashT = setTimeout(() => f.remove(), 3500);
+    }
+    function renderAtts() {
+      attsEl.replaceChildren();
+      atts.forEach((a, i) => { const b = el("button", "att", a.label + "  ✕"); b.dataset.act = "rmatt"; b.dataset.i = i; attsEl.appendChild(b); });
+      files.forEach((f, i) => { const b = el("button", "att", (f.type.startsWith("image/") ? "🖼 " : "📎 ") + f.name + "  ✕"); b.dataset.act = "rmfile"; b.dataset.i = i; attsEl.appendChild(b); });
+    }
+    const pageRef = () => "«" + (document.title || location.hostname) + "» (" + location.href + ")";
+    function addSelection() {
+      const s = document.getSelection();
+      const t = (s && !s.isCollapsed ? s.toString().trim() : "") || lastSel;
+      if (!t) { flash("Marker tekst på siden først."); return; }
+      atts.push({ kind: "sel", label: "Markering · " + t.length + " tegn", display: t, prompt: "Markert tekst fra " + pageRef() + ":\n\"\"\"\n" + t + "\n\"\"\"" });
+      renderAtts(); ta.focus({ preventScroll: true });
+    }
+    function addPage() {
+      let t = (document.body ? document.body.innerText : "").replace(/\n{3,}/g, "\n\n").trim();
+      const cut = t.length > CFG.maxPageChars; if (cut) t = t.slice(0, CFG.maxPageChars);
+      atts.push({ kind: "page", label: "All tekst · " + t.length + " tegn" + (cut ? " (avkortet)" : ""), display: t,
+        prompt: "Tekst fra nettsiden " + pageRef() + (cut ? " (avkortet)" : "") + ":\n\"\"\"\n" + t + "\n\"\"\"" });
+      renderAtts(); ta.focus({ preventScroll: true });
+    }
+
+    const TEXT_EXT = /\.(md|markdown|txt|csv|tsv|json|js|mjs|ts|tsx|jsx|py|rb|php|java|c|cc|cpp|h|cs|go|rs|swift|kt|sh|zsh|css|scss|html?|xml|yaml|yml|toml|ini|tex|log|sql)$/i;
+    const readDataURL = (blob) => new Promise((res, rej) => { const r = new FileReader(); r.onload = () => res(r.result); r.onerror = rej; r.readAsDataURL(blob); });
+    async function prepImage(f) {
+      const url = URL.createObjectURL(f);
+      try {
+        const img = new Image();
+        await new Promise((res, rej) => { img.onload = res; img.onerror = rej; img.src = url; });
+        const big = Math.max(img.naturalWidth, img.naturalHeight);
+        const scale = Math.min(1, 2048 / big);
+        const thumbC = document.createElement("canvas"), ts = Math.min(1, 160 / big);
+        thumbC.width = Math.max(1, Math.round(img.naturalWidth * ts)); thumbC.height = Math.max(1, Math.round(img.naturalHeight * ts));
+        thumbC.getContext("2d").drawImage(img, 0, 0, thumbC.width, thumbC.height);
+        const thumb = thumbC.toDataURL("image/jpeg", 0.7);
+        if (scale === 1 && f.size <= 1.5e6 && /^image\/(png|jpeg|gif|webp)$/.test(f.type)) return { name: f.name, type: f.type, data: await readDataURL(f), thumb };
+        const c = document.createElement("canvas");
+        c.width = Math.round(img.naturalWidth * scale); c.height = Math.round(img.naturalHeight * scale);
+        c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+        return { name: f.name.replace(/\.[^.]+$/, "") + ".jpg", type: "image/jpeg", data: c.toDataURL("image/jpeg", 0.85), thumb };
+      } catch (e) {
+        return { name: f.name, type: f.type || "image/jpeg", data: await readDataURL(f), thumb: "" };   // nettsidens sikkerhetsregler hindret forminsking
+      } finally { URL.revokeObjectURL(url); }
+    }
+    async function addFiles(list) {
+      for (const f of list) {
+        try {
+          const isImg = /^image\//.test(f.type) || /\.(heic|heif)$/i.test(f.name);
+          const rec = isImg ? await prepImage(f) : { name: f.name, type: f.type || "application/octet-stream", data: await readDataURL(f) };
+          if (!isImg && (TEXT_EXT.test(f.name) || /^text\//.test(f.type)) && f.size <= CFG.maxTextPreview) rec.text = await f.text();
+          const total = files.reduce((a, x) => a + x.data.length, 0) + rec.data.length;
+          if (total > CFG.maxUploadChars) { flash("For store vedlegg – maks ca. 3 MB per melding."); continue; }
+          files.push(rec);
+        } catch (e) { flash("Kunne ikke lese " + f.name + "."); }
+      }
+      renderAtts();
+    }
+    fimg.addEventListener("change", () => { addFiles([...fimg.files]); fimg.value = ""; });
+    ffile.addEventListener("change", () => { addFiles([...ffile.files]); ffile.value = ""; });
+
+    /* =================================================================
+       YOUTUBE
+       ================================================================= */
+    const isYT = () => /(^|\.)youtube\.com$/i.test(location.hostname) && /^\/(watch|live)/.test(location.pathname);
+    const SEG = "ytd-transcript-segment-renderer, transcript-segment-view-model";
+    const parseT = (s) => s.trim().split(":").map(Number).reduce((a, b) => a * 60 + (isNaN(b) ? 0 : b), 0);
+    const fmtT = (sec) => { sec = Math.max(0, Math.floor(sec)); const h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), s = sec % 60; return (h ? h + ":" + String(m).padStart(2, "0") : m) + ":" + String(s).padStart(2, "0"); };
+    async function ytSegments() {
+      let list = document.querySelectorAll(SEG);
+      if (!list.length) {
+        const btn = document.querySelector("ytd-video-description-transcript-section-renderer button") ||
+          [...document.querySelectorAll("button")].find((b) => /transcript|transkrip|avskrift/i.test((b.getAttribute("aria-label") || "") + " " + b.textContent));
+        if (!btn) throw new Error("Fant ikke «Vis transkripsjon». Har videoen transkripsjon?");
+        btn.click();
+        for (let i = 0; i < 48 && !(list = document.querySelectorAll(SEG)).length; i++) await sleep(250);
+        if (!list.length) throw new Error("Transkripsjonen lastet ikke. Prøv igjen.");
+        await sleep(600); list = document.querySelectorAll(SEG);
+      }
+      const seen = new Set();
+      return [...list].map((s) => {
+        const tsEl = s.querySelector(".segment-timestamp, [class*='timestamp']");
+        const ts = ((tsEl && tsEl.textContent) || "").trim();
+        const txEl = s.querySelector(".segment-text, [class*='segment-text']");
+        let tx = ((txEl && txEl.textContent) || "").trim();
+        if (!tx) tx = (s.innerText || "").replace(ts, "").trim();
+        return { ts, sec: ts ? parseT(ts) : 0, text: tx.replace(/\s+/g, " ") };
+      }).filter((x) => { const k = x.ts + x.text; if (!x.text || seen.has(k)) return false; seen.add(k); return true; });
+    }
+    function ytMeta() {
+      const q = (s) => document.querySelector(s);
+      const title = ((q("ytd-watch-metadata h1") || q("#title h1") || {}).textContent || document.title).trim();
+      const channel = ((q("ytd-watch-metadata ytd-channel-name a") || q("#owner ytd-channel-name a") || {}).textContent || "").trim();
+      const desc = ((q("#description-inline-expander") || q("ytd-text-inline-expander") || {}).innerText || "").trim().slice(0, 3000);
+      const url = location.href.replace(/[&?]t=\d+s?/, "");
+      return { title, channel, desc, url };
+    }
+    const YT_PROMPT = "Oppsummer YouTube-videoen grundig, men konsist, i punktform på norsk:\n" +
+      "1. Hovedpoenget i 1–2 setninger.\n2. Hovedpunktene i rekkefølge, med tidsstempel [mm:ss] for hvert punkt.\n" +
+      "3. Viktige tall, navn, definisjoner og påstander.\n4. Konklusjon og de viktigste lærdommene.";
+    async function ytSummary(btn) {
+      const old = btn.textContent; btn.textContent = "Henter …";
+      try {
+        const segs = await ytSegments(), m = ytMeta();
+        let body = segs.map((s) => "[" + s.ts + "] " + s.text).join("\n");
+        const cut = body.length > CFG.maxTranscriptChars; if (cut) body = body.slice(0, CFG.maxTranscriptChars);
+        const text = "Video: " + m.title + "\nKanal: " + m.channel + "\nURL: " + m.url + (m.desc ? "\n\nBeskrivelse:\n" + m.desc : "") + "\n\nTranskripsjon" + (cut ? " (avkortet)" : "") + ":\n" + body;
+        atts.push({ kind: "yt", label: "YouTube-transkripsjon · " + segs.length + " avsnitt", display: text, prompt: "\"\"\"\n" + text + "\n\"\"\"" });
+        renderAtts();
+        await send(YT_PROMPT);
+      } catch (e) { flash(e.message); }
+      btn.textContent = old;
+    }
+    async function ytExcerpt(btn) {
+      const old = btn.textContent; btn.textContent = "Henter …";
+      try {
+        const segs = await ytSegments(), m = ytMeta();
+        const v = document.querySelector("video.html5-main-video") || document.querySelector("video");
+        const cur = v ? v.currentTime : 0, a = cur - CFG.ytWindowSec, b = cur + CFG.ytWindowSec;
+        const part = segs.filter((s) => s.sec >= a && s.sec <= b);
+        if (!part.length) throw new Error("Fant ingen transkripsjon rundt " + fmtT(cur) + ".");
+        let marked = false;
+        const lines = part.map((s) => { let pre = ""; if (!marked && s.sec >= cur) { pre = "▶ "; marked = true; } return pre + "[" + s.ts + "] " + s.text; });
+        const text = "Video: " + m.title + " (" + m.url + ")\nUtdrag " + fmtT(a) + "–" + fmtT(b) + ", avspilt til " + fmtT(cur) + " (▶ markerer nå):\n" + lines.join("\n");
+        atts.push({ kind: "yt", label: "Utdrag " + fmtT(a) + "–" + fmtT(b), display: text, prompt: "\"\"\"\n" + text + "\n\"\"\"" });
+        renderAtts(); ta.focus({ preventScroll: true });
+      } catch (e) { flash(e.message); }
+      btn.textContent = old;
+    }
+
+    /* =================================================================
+       SENDING OG HISTORIKK
+       ================================================================= */
+    async function saveHist(h) {
+      hist = h.slice(-CFG.maxHistory);
+      await setJ(K.hist, hist);
+      lastVer = uid(); await GM.setValue(K.ver, lastVer);
+    }
+    async function send(textOverride) {
+      const text = (textOverride != null ? textOverride : ta.value).trim();
+      if ((!text && !atts.length && !files.length) || pending) return;
+      const id = uid();
+      const prompt = [text, ...atts.map((a) => a.prompt)].filter(Boolean).join("\n\n") || "Se vedleggene.";
+      const fresh = (await GM.getValue(K.fresh, "")) === "1";
+      const ctx = atts.map((a) => ({ kind: a.kind, label: a.label, text: a.display }));
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i], fid = id + "_" + i;
+        await setJ(K.file + fid, { name: f.name, type: f.type, data: f.data, text: f.text || "" });
+        ctx.push({ kind: "file", fid, name: f.name, type: f.type, thumb: f.thumb || "" });
+      }
+      const h = await getJ(K.hist, []);
+      h.push({ role: "user", reqId: id, text, ctx });
+      await saveHist(h);
+      if (files.length) await setJ(K.reqFiles, { id, files: files.map((f) => ({ name: f.name, type: f.type, data: f.data })) });
+      await setJ(K.req, { id, prompt, newChat: fresh, fileCount: files.length, ts: now() });
+      if (fresh) await GM.setValue(K.fresh, "");
+      ta.value = ""; autosize(); atts = []; files = []; renderAtts();
+      lastSel = null; selChip.classList.remove("on"); selChip.textContent = "+ Markering";
+      pending = { id }; stick = true; lastSig = "";
+      tick();
+    }
+    async function newChat() {
+      const keys = await GM.listValues();
+      for (const k of keys) if (k.startsWith(K.file)) await GM.deleteValue(k);
+      await saveHist([]);
+      await setJ(K.req, null);
+      await GM.setValue(K.fresh, "1");
+      pending = null; live = null; openSet.clear(); closeViewer(); lastSig = "";
+      tick(); ta.focus({ preventScroll: true });
+    }
+    async function cancelWait() {
+      const req = await getJ(K.req, null);
+      const h = await getJ(K.hist, []);
+      if (req) h.push({ role: "ai", reqId: req.id, error: "Avbrutt." });
+      await saveHist(h); await setJ(K.req, null);
+      pending = null; lastSig = ""; tick();
+    }
+    let cmdChain = Promise.resolve();
+    const sendCmd = (type, extra) => (cmdChain = cmdChain.then(async () => {
+      const q = (await getJ(K.cmd, [])) || [];
+      const list = (Array.isArray(q) ? q : []).filter((c) => now() - c.ts < 60000).slice(-9);
+      list.push(Object.assign({ id: uid(), type, ts: now() }, extra || {}));
+      await setJ(K.cmd, list);
+    }).catch(() => {}));
+
+    /* =================================================================
+       VISNING AV SAMTALEN
+       ================================================================= */
+    function foldEl(cls, key, label, bodyNode) {
+      const open = openSet.has(key);
+      const b = el("div", cls + (open ? " open" : ""));
+      b.dataset.act = "fold"; b.dataset.key = key;
+      b.appendChild(el("div", cls === "think" ? "tlbl" : "flbl", label + (open ? " ▾" : " ▸")));
+      b.appendChild(bodyNode);
+      return b;
+    }
+    function userEl(h) {
+      const w = el("div", "u");
+      if (h.text) w.appendChild(el("div", "user", h.text));
+      (h.ctx || []).forEach((c, i) => {
+        if (c.kind === "sel") { const q = el("div", "quote"); q.appendChild(el("div", "qlbl", "Markering")); q.appendChild(el("div", null, c.text)); w.appendChild(q); }
+        else if (c.kind === "page" || c.kind === "yt") w.appendChild(foldEl("fold", h.reqId + ":c" + i, c.label, el("div", "ftxt", c.text)));
+        else if (c.kind === "file") {
+          const b = el("button", "fchip"); b.dataset.act = "vfile"; b.dataset.fid = c.fid;
+          if (c.thumb) { const im = el("img"); im.src = c.thumb; im.alt = ""; b.appendChild(im); } else b.appendChild(el("span", null, "📎"));
+          b.appendChild(el("span", null, c.name)); w.appendChild(b);
+        }
+      });
+      return w;
+    }
+    function aiEl(h, streaming) {
+      const d = el("div", "ai" + (h.error ? " err" : ""));
+      if (h.error) { d.textContent = h.error; return d; }
+      if (h.think) {
+        const body = el("div", "tbody md"); body.innerHTML = sanitizeHtml(h.think);
+        d.appendChild(foldEl("think", h.reqId + ":think", streaming && !h.html ? "Tenker …" : "Tenkning", body));
+      }
+      const md = el("div", "md"); md.innerHTML = sanitizeHtml(h.html || "");
+      md.querySelectorAll('[data-sp="think"]').forEach((x, j) => {
+        const body = el("div", "tbody md"); while (x.firstChild) body.appendChild(x.firstChild);
+        x.replaceWith(foldEl("think", h.reqId + ":ithink" + j, "Tenkning", body));
+      });
+      md.querySelectorAll('[data-sp="art"]').forEach((x) => {
+        const i = parseInt(x.getAttribute("data-i"), 10) || 0, a = (h.arts || [])[i];
+        const b = el("button", "art", "📄 " + ((a && a.title) || x.textContent || "Artefakt"));
+        b.dataset.act = "art"; b.dataset.req = h.reqId; b.dataset.i = i; x.replaceWith(b);
+      });
+      d.appendChild(md);
+      if (!streaming) { const m = el("div", "meta"); const c = el("button", "ic", "Kopier"); c.dataset.act = "copy"; m.appendChild(c); d.appendChild(m); }
+      return d;
+    }
+    function emptyEl() {
+      const e = el("div", "empty");
+      if (bridgeOn) e.textContent = "Still et spørsmål. «+ Markering» og «+ All tekst» legger ved tekst fra denne siden.";
+      else {
+        e.appendChild(el("div", null, "Ha sider.ai åpen i et eget Safari-vindu (Split View) og vær logget inn."));
+        const a = el("a", null, "Åpne sider.ai"); a.href = CFG.chatUrl; a.target = "_blank"; a.rel = "noopener";
+        a.title = "Dra lenken til skjermkanten for å åpne den i Split View";
+        const p = el("div"); p.style.marginTop = ".6rem"; p.appendChild(a); e.appendChild(p);
+      }
+      return e;
+    }
+    function render() {
+      const c = el("div", "content");
+      if (!hist.length && !pending) c.appendChild(emptyEl());
+      hist.forEach((h) => c.appendChild(h.role === "user" ? userEl(h) : aiEl(h, false)));
+      if (pending) {
+        if (live && (live.html || live.think)) c.appendChild(aiEl({ reqId: pending.id, html: live.html, think: live.think, arts: live.arts }, true));
+        const t = el("div", "typing", bridgeOn ? "Sider skriver … " : "Venter på sider.ai-vinduet … ");
+        const b = el("button", "ic", "Avbryt"); b.dataset.act = "cancel"; t.appendChild(b); c.appendChild(t);
+      }
+      const keepBottom = stick;
+      msgs.replaceChildren(c);
+      colEls.forEach((col) => col.track.replaceChildren(c.cloneNode(true)));
+      if (keepBottom) msgs.scrollTop = msgs.scrollHeight;
+      if (isOpen) layout();
+    }
+    function updateChrome() {
+      dot.classList.toggle("on", bridgeOn);
+      dot.title = bridgeOn ? "Koblet til sider.ai-vinduet" : "sider.ai-vinduet er ikke aktivt";
+      stxt.textContent = bridgeOn ? (pending ? "svarer …" : "") : "ikke koblet til";
+      sendBtn.disabled = !!pending;
+      fab.classList.toggle("busy", !!pending);
+      const st = bstate || {};
+      modelBtn.textContent = (st.active || "Modell") + " ▾";
+      const th = st.think || { available: false, on: false };
+      thinkBtn.disabled = !th.available; thinkBtn.classList.toggle("on", !!th.on);
+      thinkBtn.title = th.available ? (th.on ? "Tenkemodus er på" : "Slå på tenkemodus") : "Ikke tilgjengelig for valgt modell";
+      const yt = isYT(); ytChips.forEach((c) => (c.hidden = !yt));
+    }
+
+    /* ---------- Synkronisering med sider.ai-vinduet ---------- */
+    async function appendAi(id, r) {
+      const h = await getJ(K.hist, []);
+      if (!h.some((x) => x.role === "ai" && x.reqId === id)) {
+        h.push(r.status === "done" ? { role: "ai", reqId: id, html: r.html, think: r.think, arts: r.arts || [] } : { role: "ai", reqId: id, error: r.error || "Ukjent feil." });
+        await saveHist(h);
+      } else { hist = h; }
+    }
+    let ticking = false;
+    async function tick() {
+      if (ticking) return; ticking = true;
+      try {
+        const [hbRaw, ver, req, st] = await Promise.all([GM.getValue(K.hb, "0"), GM.getValue(K.ver, ""), getJ(K.req, null), getJ(K.state, null)]);
+        bridgeOn = now() - (+hbRaw || 0) < 4000; bstate = st;
+        if (ver !== lastVer) { hist = await getJ(K.hist, []); lastVer = ver; }
+        const answered = (id) => hist.some((h) => h.role === "ai" && h.reqId === id);
+        pending = req && req.id && !answered(req.id) ? { id: req.id } : null;
+        live = null;
+        if (pending) {
+          const r = await getJ(K.res, null);
+          if (r && r.id === pending.id) {
+            if (r.status === "done" || r.status === "error") { await appendAi(pending.id, r); pending = null; }
+            else live = r;
+          }
+        }
+        updateChrome();
+        const aiCount = hist.filter((h) => h.role === "ai").length;
+        if (seenAi < 0 || isOpen) seenAi = aiCount; else if (aiCount > seenAi) fab.classList.add("news");
+        const sig = JSON.stringify([lastVer, pending && pending.id, live && [live.html.length, live.think.length, live.html.slice(-60)], bridgeOn]);
+        if (sig !== lastSig) { lastSig = sig; render(); }
+      } catch (e) {}
+      ticking = false;
+    }
+
+    /* =================================================================
+       MODELLVELGER
+       ================================================================= */
+    function showModels() {
+      const st = bstate || {}, models = (st.models || []).slice();
+      mpop.replaceChildren();
+      if (!models.length) {
+        mpop.appendChild(el("div", "mcat", "Ingen modelliste ennå"));
+      } else {
+        const rank = { "Avansert": 0, "Grunnleggende": 1 };
+        models.sort((a, b) => ((rank[a.category] ?? 2) - (rank[b.category] ?? 2)) || ((b.count ?? -1) - (a.count ?? -1)) || a.name.localeCompare(b.name, "nb"));
+        let cat = null;
+        models.forEach((m) => {
+          const c = m.category || "Modeller";
+          if (c !== cat) { mpop.appendChild(el("div", "mcat", c)); cat = c; }
+          const b = el("button", "mitem" + (m.name === st.active ? " on" : ""), m.name);
+          if (m.count != null) b.appendChild(el("small", null, "  · " + m.count + " kr."));
+          b.dataset.act = "pick"; b.dataset.name = m.name; mpop.appendChild(b);
+        });
+      }
+      const r = el("button", "mitem", "↻ Oppdater listen"); r.dataset.act = "harvest"; mpop.appendChild(r);
+      mpop.hidden = false;
+    }
+
+    /* =================================================================
+       FIL- OG ARTEFAKTVISNING (TIL HØYRE FOR TEKSTSEKSJON 1)
+       ================================================================= */
+    function closeViewer() { viewer = null; viewerEl.hidden = true; vbody.replaceChildren(); if (isOpen) layout(); }
+    function sandboxFrame(html) {
+      const f = el("iframe"); f.setAttribute("sandbox", "");
+      f.srcdoc = '<meta http-equiv="Content-Security-Policy" content="default-src \'none\'; style-src \'unsafe-inline\'; img-src data:">' + html;
+      return f;
+    }
+    function showText(name, text, lang) {
+      const l = (lang || (name.match(/\.(\w+)$/) || [])[1] || "").toLowerCase();
+      if (/^(md|markdown)$/.test(l)) { const d = el("div", "md"); d.innerHTML = sanitizeHtml(mdToHtml(text)); return d; }
+      if (/^html?$/.test(l)) return sandboxFrame(text);
+      if (l === "svg") { const im = el("img"); im.src = "data:image/svg+xml;charset=utf-8," + encodeURIComponent(text); return im; }
+      if (l === "json") { try { text = JSON.stringify(JSON.parse(text), null, 2); } catch (e) {} }
+      const d = el("div", "md"), p = el("pre"), c = el("code", null, text); p.appendChild(c); d.appendChild(p); return d;
+    }
+    function getArt(reqId, i) {
+      const h = hist.find((x) => x.role === "ai" && x.reqId === reqId);
+      const arts = h ? h.arts : (live && pending && pending.id === reqId ? live.arts : null);
+      return arts ? arts[i] : null;
+    }
+    async function openViewer(v) {
+      viewer = v; viewerEl.hidden = false; vbody.replaceChildren(); vbody.scrollTop = 0;
+      if (v.type === "file") {
+        const f = await getJ(K.file + v.fid, null);
+        vtitle.textContent = f ? f.name : "Fil";
+        if (!f) vbody.appendChild(el("div", "vnote", "Filen er ikke lenger lagret."));
+        else if (/^image\//.test(f.type)) { const im = el("img"); im.src = f.data; vbody.appendChild(im); }
+        else if (/pdf/.test(f.type)) {
+          const [, b64] = f.data.split(","), bin = atob(b64), u8 = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+          const o = el("object"); o.type = "application/pdf"; o.data = URL.createObjectURL(new Blob([u8], { type: "application/pdf" }));
+          vbody.appendChild(o);
+        } else if (f.text) vbody.appendChild(showText(f.name, f.text));
+        else vbody.appendChild(el("div", "vnote", "Ingen forhåndsvisning for denne filtypen."));
+      } else {
+        const a = getArt(v.reqId, v.i);
+        vtitle.textContent = a ? a.title : "Artefakt";
+        const tmp = el("div"); if (a && a.kind !== "code") tmp.innerHTML = sanitizeHtml(a.html);
+        const empty = !a || (a.kind === "code" ? !a.text.trim() : !tmp.textContent.trim());
+        if (empty) {
+          vbody.appendChild(el("div", "vnote", "Innholdet vises bare i sider.ai-vinduet."));
+          if (a) { const b = el("button", "chip", "Åpne i sider.ai-vinduet"); b.dataset.act = "artsider"; b.dataset.gi = a.gi; vbody.appendChild(b); }
+        } else if (a.kind === "code") vbody.appendChild(showText(a.title, a.text, a.lang));
+        else { const d = el("div", "md"); d.innerHTML = sanitizeHtml(a.html); vbody.appendChild(d); }
+      }
+      layout();
+    }
+
+    /* =================================================================
+       KLIKK
+       ================================================================= */
+    root.addEventListener("click", (e) => {
+      const t = e.target;
+      // Oversikt: klikk på en halvåpen seksjon viser den helt
+      if (overview) {
+        const col = t.closest(".col");
+        if (col && !t.closest("[data-act]")) { const k = +col.dataset.k; activeK = activeK === k ? 1 : k; layout(); return; }
+        if (t.closest(".s1") && activeK !== 1 && !t.closest("[data-act], textarea")) { activeK = 1; layout(); }
+        if (t === panel || t === cols) { setOverview(false); return; }
+      }
+      const setBtn = t.closest("[data-set] button");
+      if (setBtn) { S[setBtn.parentElement.dataset.set] = setBtn.dataset.v; saveSettings(); return; }
+      const b = t.closest("[data-act]");
+      if (!b) { if (!t.closest(".mpop, .model")) mpop.hidden = true; return; }
+      const act = b.dataset.act;
+      if (act !== "models" && act !== "pick" && act !== "harvest") mpop.hidden = true;
+      switch (act) {
+        case "close": setOpen(false); break;
+        case "overview": setOverview(!overview); break;
+        case "settings": settingsEl.hidden = !settingsEl.hidden; b.classList.toggle("on", !settingsEl.hidden); layout(); break;
+        case "fs-": S.fs = clamp(S.fs - 1, 11, 24); saveSettings(); render(); break;
+        case "fs+": S.fs = clamp(S.fs + 1, 11, 24); saveSettings(); render(); break;
+        case "new": newChat(); break;
+        case "send": send(); break;
+        case "sel": addSelection(); break;
+        case "page": addPage(); break;
+        case "pickimg": fimg.click(); break;
+        case "pickfile": ffile.click(); break;
+        case "ytsum": ytSummary(b); break;
+        case "ytnow": ytExcerpt(b); break;
+        case "rmatt": atts.splice(+b.dataset.i, 1); renderAtts(); break;
+        case "rmfile": files.splice(+b.dataset.i, 1); renderAtts(); break;
+        case "cancel": cancelWait(); break;
+        case "models": if (mpop.hidden) showModels(); else mpop.hidden = true; break;
+        case "pick": sendCmd("model", { name: b.dataset.name }); if (bstate) bstate.active = b.dataset.name; mpop.hidden = true; updateChrome(); break;
+        case "harvest": sendCmd("harvest"); mpop.hidden = true; flash("Henter modellisten i sider.ai-vinduet …"); break;
+        case "think": sendCmd("think"); break;
+        case "fold": { const k = b.dataset.key; if (openSet.has(k)) openSet.delete(k); else openSet.add(k); stick = false; render(); break; }
+        case "vfile": openViewer({ type: "file", fid: b.dataset.fid }); break;
+        case "art": openViewer({ type: "art", reqId: b.dataset.req, i: +b.dataset.i }); break;
+        case "artsider": sendCmd("art", { gi: +b.dataset.gi }); flash("Åpnet i sider.ai-vinduet."); break;
+        case "vclose": closeViewer(); break;
+        case "copy": {
+          const md = b.closest(".ai") && b.closest(".ai").querySelector(":scope > .md");
+          if (md && navigator.clipboard) navigator.clipboard.writeText(md.innerText).then(() => { b.textContent = "Kopiert"; setTimeout(() => (b.textContent = "Kopier"), 1500); }).catch(() => {});
+          break;
+        }
+      }
+    });
+
+    /* =================================================================
+       OPPSTART
+       ================================================================= */
+    (async () => {
+      S = Object.assign(S, await getJ(K.settings, {}));
+      W = +(await GM.getValue(K.width, "")) || CFG.defaultWidth;
+      const fy = +(await GM.getValue(K.fabY, "")); if (fy) fabY = fy;
+      applySettings(); placeFab();
+      const attach = () => { if (!host.isConnected) document.documentElement.appendChild(host); };
+      attach(); setInterval(attach, 2000);
+      await tick();
+      if ((await GM.getValue(K.open, "")) === "1") setOpen(true, false);
+      for (;;) { await sleep(isOpen || pending ? 600 : 2500); await tick(); }
+    })();
+  }
+})();
