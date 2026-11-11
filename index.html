@@ -83,7 +83,7 @@
     /* Farger (sRGB) */
     .c-vpn      { background: #EEEBDE; color: #050000; }
     .c-search   { background: #EEEBDE; color: #050000; }
-    .c-aimode   { background: #EEEBDE; color: #EE4CA8; }
+    .c-ask      { background: #EEEBDE; color: #EE4CA8; }
     .c-sider    { background: #7F60FE; color: #EE4CA8; }
     .c-claude   { background: #C15F3C; color: #FAF9F5; }
     .c-anki     { background: #2468B8; color: #FFFFFF; }
@@ -136,10 +136,10 @@
     <textarea id="q" rows="1" autofocus placeholder="Skriv her …" aria-label="Søk" autocomplete="off"></textarea>
   </div>
 
-  <!-- 1. rad: Søk + AI-modus -->
+  <!-- 1. rad: Søk + Ask (begge Brave Search) -->
   <div class="row">
-    <button type="button" class="btn c-search grow" data-medium="google">Søk</button>
-    <button type="button" class="btn c-aimode cell" data-medium="aimode">AI-modus</button>
+    <button type="button" class="btn c-search grow" data-medium="brave">Søk</button>
+    <button type="button" class="btn c-ask cell" data-medium="ask">Ask</button>
   </div>
 
   <!-- 2. rad: YouTube, [Anki], [Claude.AI], Sider.AI -->
@@ -186,9 +186,10 @@
     }
 
     // ---------- Søkemedier ----------
+    const DEFAULT = "brave"; // standard søkemedium (Brave Search)
     const MEDIA = {
-      google:  (t) => openUrl("https://www.google.com/search?q=" + enc(t)),
-      aimode:  (t) => { copy(t); openUrl("https://www.google.com/search?udm=50&q=" + enc(t)); },
+      brave:   (t) => openUrl("https://search.brave.com/search?q=" + enc(t)),
+      ask:     (t) => { copy(t); openUrl("https://search.brave.com/ask?q=" + enc(t)); },
       youtube: (t) => openUrl("https://www.youtube.com/results?search_query=" + enc(t)),
       anki:    (t) => runShortcut("InputBrowseAnki", t),
       claude:  (t) => runShortcut("InputAskClaude", t),
@@ -196,11 +197,11 @@
     };
 
     const buttons = Array.from(document.querySelectorAll("[data-medium]"));
-    let selected = "google";
+    let selected = DEFAULT;
 
     function select(m) {
       selected = m;
-      const active = m !== "google";
+      const active = m !== DEFAULT;
       buttons.forEach((b) => {
         const me = b.dataset.medium === m;
         b.classList.toggle("dim", active && !me);
@@ -224,7 +225,7 @@
         const t = q.value.trim();
         if (t) { MEDIA[m](t); return; }
         // Tomt søkefelt: velg søkemedium for Enter (trykk igjen / på "Søk" for å nullstille)
-        select(m === "google" || m === selected ? "google" : m);
+        select(m === DEFAULT || m === selected ? DEFAULT : m);
         q.focus();
       });
     });
@@ -235,13 +236,13 @@
         e.preventDefault();
         const t = q.value.trim();
         if (t) MEDIA[selected](t);
-      } else if (e.key === "Escape" && selected !== "google") {
+      } else if (e.key === "Escape" && selected !== DEFAULT) {
         e.preventDefault();
-        select("google");
-      } else if (e.key === "Backspace" && selected !== "google" &&
+        select(DEFAULT);
+      } else if (e.key === "Backspace" && selected !== DEFAULT &&
                  q.selectionStart === 0 && q.selectionEnd === 0) {
         e.preventDefault();
-        select("google");
+        select(DEFAULT);
       }
     });
     q.addEventListener("input", () => autosize(q));
