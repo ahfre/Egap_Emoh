@@ -137,10 +137,10 @@
     <textarea id="q" rows="1" autofocus placeholder="Skriv her …" aria-label="Søk" autocomplete="off"></textarea>
   </div>
 
-  <!-- 1. rad: Søk + Ask (begge Brave Search) -->
+  <!-- 1. rad: Søk (Startpage) + Placeholder (gjør ingenting) -->
   <div class="row">
-    <button type="button" class="btn c-search grow" data-medium="brave">Søk</button>
-    <button type="button" class="btn c-ask cell" data-medium="ask">Ask</button>
+    <button type="button" class="btn c-search grow" data-medium="startpage">Søk</button>
+    <button type="button" class="btn c-ask cell">Placeholder</button>
   </div>
 
   <!-- 2. rad: YouTube, [Anki], [Claude.AI], Sider.AI -->
@@ -186,11 +186,28 @@
       if (window.scrollY !== y) window.scrollTo(0, y);
     }
 
+    // Startpage-søk sendes som POST, så søket ikke havner i adresselinjen/historikken
+    const SP_PRFE = "92c89cd64e435ecdb2b77196743df276d0ad442255d173eba0fc5e068092245e4184a2c12ad346c3a2e56131aa48538cd7379cd8672223097f4c854eff612405e46a81acaeda9469d3ee82664d25b3";
+    function startpagePost(t) {
+      const f = document.createElement("form");
+      f.method = "POST";
+      f.action = "https://www.startpage.com/sp/search";
+      f.target = "_blank";                 // ny fane, som openUrl
+      f.rel = "noopener noreferrer";
+      for (const [k, v] of [["query", t], ["prfe", SP_PRFE]]) {
+        const i = document.createElement("input");
+        i.type = "hidden"; i.name = k; i.value = v;
+        f.appendChild(i);
+      }
+      document.body.appendChild(f);
+      f.submit();
+      f.remove();
+    }
+
     // ---------- Søkemedier ----------
-    const DEFAULT = "brave"; // standard søkemedium (Brave Search)
+    const DEFAULT = "startpage"; // standard søkemedium (Startpage)
     const MEDIA = {
-      brave:   (t) => openUrl("https://search.brave.com/search?q=" + enc(t)),
-      ask:     (t) => { copy(t); openUrl("https://search.brave.com/ask?q=" + enc(t)); },
+      startpage: (t) => startpagePost(t),
       youtube: (t) => openUrl("https://www.youtube.com/results?search_query=" + enc(t)),
       anki:    (t) => runShortcut("InputBrowseAnki", t),
       claude:  (t) => runShortcut("InputAskClaude", t),
