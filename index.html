@@ -322,6 +322,11 @@
     };
     focusSearch();
     window.addEventListener("pageshow", focusSearch);
+
+    // ---------- Lokal lagring av siden (raskere oppstart) ----------
+    if ("serviceWorker" in navigator) {
+      navigator.serviceWorker.register("./sw.js").catch(() => {});
+    }
   })();
   </script>
 </body>
