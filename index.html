@@ -187,11 +187,11 @@
     }
 
     // Startpage-søk sendes som POST, så søket ikke havner i adresselinjen/historikken
-    const SP_PRFE = "92c89cd64e435ecdb2b77196743df276d0ad442255d173eba0fc5e068092245e4184a2c12ad346c3a2e56131aa48538cd7379cd8672223097f4c854eff612405e46a81acaeda9469d3ee82664d25b3";
+    const SP_PRFE = "8fa5a231b6b7e30430befb601a94c848613e5c8edd6b2499567c5639f2bff396f6d8f22712470120a43b61877d41b4b81ebc956d656a7bc83dd946e2a149a10aae2cba516b18e14458e34376cf";
     function startpagePost(t) {
       const f = document.createElement("form");
       f.method = "POST";
-      f.action = "https://www.startpage.com/sp/search";
+      f.action = "https://eu.startpage.com/sp/search";
       f.target = "_blank";                 // ny fane, som openUrl
       f.rel = "noopener noreferrer";
       for (const [k, v] of [["query", t], ["prfe", SP_PRFE]]) {
